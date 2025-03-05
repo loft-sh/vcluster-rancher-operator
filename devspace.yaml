@@ -30,11 +30,10 @@ images:
 # This is a list of `deployments` that DevSpace can create for this project
 deployments:
   app:
-    # This deployment uses `kubectl` but you can also define `helm` deployments
-    kubectl:
-      manifests:
-        - /home/ricardo/dev/go/vcluster-rancher-op/config/manager
-      kustomize: false
+    namespace: system
+    helm:
+      chart:
+       name: ./chart
 
 # This is a list of `dev` containers that are based on the containers created by your deployments
 dev:

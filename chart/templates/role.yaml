@@ -7,19 +7,6 @@ rules:
 - apiGroups:
   - management.cattle.io
   resources:
-  - clusterregistrationtokens
-  verbs:
-  - get
-- apiGroups:
-  - management.cattle.io
-  resources:
-  - clusterroletemplatebindings
-  verbs:
-  - create
-  - list
-- apiGroups:
-  - management.cattle.io
-  resources:
   - clusters
   - tokens
   verbs:
@@ -47,7 +34,7 @@ rules:
 - apiGroups:
   - management.cattle.io
   resources:
-  - projectroletemplatebindings
+  - users
   verbs:
   - list
 - apiGroups:

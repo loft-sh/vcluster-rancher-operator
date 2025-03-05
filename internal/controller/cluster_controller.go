@@ -21,10 +21,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sync"
 
-	"github.com/loft-sh/vcluster-rancher-op/pkg/clustermanager"
 	"github.com/loft-sh/vcluster-rancher-op/pkg/services"
 	"github.com/loft-sh/vcluster-rancher-op/pkg/unstructured"
 	"github.com/rancher/wrangler/pkg/randomtoken"
@@ -35,15 +33,16 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const (
-	IntegrationRancherUser = "VCLUSTER_RANCHER_USER"
-	clusterEndpointFmt     = "https://rancher.cattle-system/k8s/clusters/%s"
+	clusterEndpointFmt = "https://rancher.cattle-system/k8s/clusters/%s"
 )
 
 var (
@@ -56,13 +55,12 @@ func init() {
 
 // ClusterReconciler reconciles a Cluster object
 type ClusterReconciler struct {
-	Client         unstructured.Client
-	Scheme         *runtime.Scheme
-	ClusterManager *clustermanager.Manager
+	Client unstructured.Client
+	Scheme *runtime.Scheme
 
-	tokenLock    sync.RWMutex
+	lock         sync.RWMutex
 	rancherToken string
-	peers        map[string]string
+	peers        map[string]struct{}
 }
 
 type data struct {
@@ -72,24 +70,23 @@ type data struct {
 	Token       string
 }
 
-// +kubebuilder:rbac:groups=management.cattle.io,resources=clusters,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=management.cattle.io,resources=clusters;tokens,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=management.cattle.io,resources=clusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=management.cattle.io,resources=clusters/finalizers,verbs=update
+// +kubebuilder:rbac:groups=management.cattle.io,resources=users,verbs=list
+// +kubebuilder:rbac:groups=provisioning.cattle.io,resources=clusters;tokens,verbs=get;list;create;update;delete
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Cluster object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.2/pkg/reconcile
+// Reconcile
 func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
-	fmt.Println("print works")
-	logger.Info("logger works")
-	_, ok := r.peers[req.Name]
+
+	var ok bool
+	func() {
+		r.lock.Lock()
+		defer r.lock.Unlock()
+		_, ok = r.peers[req.Name]
+	}()
+
 	if ok {
 		return ctrl.Result{}, nil
 	}
@@ -97,11 +94,16 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if req.Name == "c-m-6z5mhg2b" || req.Name == "c-m-fmsf4k4w" {
 		return ctrl.Result{}, nil
 	}
-	r.tokenLock.RLock()
-	tokenNameAndValue := r.rancherToken
-	r.tokenLock.RUnlock()
+
+	var tokenNameAndValue string
+	func() {
+		r.lock.RLock()
+		defer r.lock.RUnlock()
+		tokenNameAndValue = r.rancherToken
+	}()
+
 	if tokenNameAndValue == "" {
-		tokenList, err := r.Client.ListWithLabels(ctx, schema.GroupVersionKind{Kind: "token", Group: "management.cattle.io", Version: "v3"}, "loft.sh/vcluster-rancher-system-token", "true")
+		tokenList, err := r.Client.ListWithLabel(ctx, schema.GroupVersionKind{Kind: "token", Group: "management.cattle.io", Version: "v3"}, "loft.sh/vcluster-rancher-system-token", "true")
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -113,7 +115,11 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			}
 		}
 
-		systemUser := os.Getenv(IntegrationRancherUser)
+		systemUser, err := r.Client.GetFirstWithLabel(ctx, schema.GroupVersionKind{Kind: "User", Group: "management.cattle.io", Version: "v3"}, "loft.sh/vcluster-rancher-user", "true")
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+
 		tokenValue, err := randomtoken.Generate()
 		if err != nil {
 			return ctrl.Result{}, err
@@ -124,29 +130,35 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			schema.GroupVersionKind{Kind: "Token", Group: "management.cattle.io", Version: "v3"},
 			"token-vcluster-rancher-op",
 			"",
+			false,
 			map[string]string{"loft.sh/vcluster-rancher-system-token": "true"},
 			map[string]interface{}{
 				"authProvider": "local",
-				"userId":       systemUser,
+				"userId":       systemUser.GetName(),
 				"token":        tokenValue,
 			})
-
-		tokenNameAndValue = fmt.Sprintf("token-vcluster-rancher-op:%s", tokenValue)
-		r.tokenLock.Lock()
-		r.rancherToken = tokenNameAndValue
-		r.tokenLock.Unlock()
+		err = func() error {
+			tokenNameAndValue = fmt.Sprintf("token-vcluster-rancher-op:%s", tokenValue)
+			r.lock.Lock()
+			defer r.lock.Unlock()
+			r.rancherToken = tokenNameAndValue
+			restConfig, err := restConfigFromToken("local", tokenNameAndValue)
+			if err != nil {
+				return err
+			}
+			unstructuredClusterClient, err := cluster.New(restConfig)
+			if err != nil {
+				return err
+			}
+			r.Client = unstructured.Client{Client: unstructuredClusterClient.GetClient()}
+			return nil
+		}()
 	}
 
-	kubeConfig, err := ForTokenBased("", req.Name, fmt.Sprintf(clusterEndpointFmt, req.Name), tokenNameAndValue)
+	restConfig, err := restConfigFromToken(req.Name, tokenNameAndValue)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-
-	restConfig, err := clientcmd.RESTConfigFromKubeConfig([]byte(kubeConfig))
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	restConfig.Insecure = true
 
 	clusterClient, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
@@ -156,7 +168,6 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	sharedInformer := cache.NewSharedInformer(&cache.ListWatch{
 		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 			options.LabelSelector = "app=vcluster"
-			fmt.Println("list services for", req.Name)
 			return clusterClient.CoreV1().Services("").List(ctx, options)
 		},
 		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
@@ -165,27 +176,38 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		},
 	}, &v1.Service{}, 0)
 
-	downstreamCluster, err := cluster.New(restConfig)
+	unstructuredClusterClient, err := cluster.New(restConfig)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-
 	_, err = sharedInformer.AddEventHandler(&services.Handler{
-		Ctx:         ctx,
-		LocalClient: r.Client,
-		ClusterClient: unstructured.Client{
-			Client: downstreamCluster.GetClient(),
+		Ctx:                     ctx,
+		Logger:                  logger,
+		LocalUnstructuredClient: r.Client,
+		ClusterUnstructuredClient: unstructured.Client{
+			Client: unstructuredClusterClient.GetClient(),
 		},
-		ClusterName: req.Name,
+		ClusterClient: clusterClient,
+		ClusterName:   req.Name,
 	})
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	sharedInformer.Run(ctx.Done())
-	sharedInformer.HasSynced()
+	func() {
+		r.lock.Lock()
+		defer r.lock.Unlock()
+		if r.peers == nil {
+			r.peers = make(map[string]struct{})
+		}
+		r.peers[req.Name] = struct{}{}
+	}()
 
-	fmt.Println("synced", req.Name)
+	go func() {
+		logger.Info(fmt.Sprintf("starting handler for %s's vclusters\n", req.Name))
+		sharedInformer.Run(ctx.Done())
+		logger.Info(fmt.Sprintf("finished running handler for %s's vclusters\n", req.Name))
+	}()
 	return ctrl.Result{}, nil
 }
 
@@ -203,9 +225,10 @@ func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func ForTokenBased(clusterName, clusterID, host, token string) (string, error) {
+func ForTokenBased(clusterID, host, token string) (string, error) {
+	// this code is mostly taken from rancher/wrangler
 	data := &data{
-		ClusterName: clusterName,
+		ClusterName: "",
 		ClusterID:   clusterID,
 		Host:        host,
 		Token:       token,
@@ -218,4 +241,19 @@ func ForTokenBased(clusterName, clusterID, host, token string) (string, error) {
 	buf := &bytes.Buffer{}
 	err := tokenTemplate.Execute(buf, data)
 	return buf.String(), err
+}
+
+func restConfigFromToken(clusterID, token string) (*rest.Config, error) {
+	kubeConfig, err := ForTokenBased(clusterID, fmt.Sprintf(clusterEndpointFmt, clusterID), token)
+	if err != nil {
+		return nil, err
+	}
+
+	restConfig, err := clientcmd.RESTConfigFromKubeConfig([]byte(kubeConfig))
+	if err != nil {
+		return nil, err
+	}
+	restConfig.Insecure = true
+
+	return restConfig, nil
 }

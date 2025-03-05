@@ -1,0 +1,18 @@
+{{- $userName := randAlphaNum 5 | lower -}}
+apiVersion: management.cattle.io/v3
+description: ""
+kind: User
+metadata:
+  name: {{ $userName }}
+  labels:
+    loft.sh/vcluster-rancher-user: "true"
+principalIds:
+- system://loft.sh/vcluster-rancher
+spec: {}
+---
+apiVersion: management.cattle.io/v3
+globalRoleName: admin
+kind: GlobalRoleBinding
+metadata:
+  name: globalrolebinding-{{ randAlphaNum 5 | lower }}
+userName: {{ $userName }}

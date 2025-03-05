@@ -19,8 +19,6 @@ package main
 import (
 	"crypto/tls"
 	"flag"
-	"github.com/loft-sh/vcluster-rancher-op/pkg/clustermanager"
-	"github.com/loft-sh/vcluster-rancher-op/pkg/unstructured"
 	"os"
 	"path/filepath"
 
@@ -28,6 +26,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	"github.com/loft-sh/vcluster-rancher-op/pkg/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -203,9 +202,8 @@ func main() {
 	}
 
 	if err = (&controller.ClusterReconciler{
-		Client:         unstructured.Client{Client: mgr.GetClient()},
-		Scheme:         mgr.GetScheme(),
-		ClusterManager: &clustermanager.Manager{LocalClient: mgr.GetClient()},
+		Client: unstructured.Client{Client: mgr.GetClient()},
+		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Cluster")
 		os.Exit(1)

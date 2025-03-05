@@ -1,0 +1,7 @@
+replicaCount: 1
+
+image:
+  registry: "ghcr.io"
+  repository: vcluster-rancher-op
+  pullPolicy: IfNotPresent
+  tag: "v0.0.1"

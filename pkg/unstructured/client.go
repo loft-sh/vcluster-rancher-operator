@@ -25,10 +25,14 @@ func (c *Client) Get(ctx context.Context, gvk schema.GroupVersionKind, name, nam
 	return obj, nil
 }
 
-func (c *Client) Create(ctx context.Context, gvk schema.GroupVersionKind, name, namespace string, labels map[string]string, object map[string]interface{}) (unstructured.Unstructured, error) {
+func (c *Client) Create(ctx context.Context, gvk schema.GroupVersionKind, name, namespace string, genName bool, labels map[string]string, object map[string]interface{}) (unstructured.Unstructured, error) {
 	obj := unstructured.Unstructured{Object: object}
 	obj.SetNamespace(namespace)
-	obj.SetName(name)
+	if genName {
+		obj.SetGenerateName(name)
+	} else {
+		obj.SetName(name)
+	}
 	obj.SetGroupVersionKind(gvk)
 	obj.SetLabels(labels)
 	err := c.Client.Create(ctx, &obj)
@@ -36,23 +40,21 @@ func (c *Client) Create(ctx context.Context, gvk schema.GroupVersionKind, name, 
 		return unstructured.Unstructured{}, err
 	}
 
-	err = c.Client.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, &obj)
-	if err != nil {
-		return unstructured.Unstructured{}, err
-	}
-
 	return obj, nil
 }
 
-func (c *Client) ListWithLabels(ctx context.Context, gvk schema.GroupVersionKind, key, value string) (unstructured.UnstructuredList, error) {
-	list := unstructured.UnstructuredList{Items: []unstructured.Unstructured{}}
-	matchReq, err := labels.NewRequirement(key, selection.Equals, []string{value})
-	if err != nil {
-		return unstructured.UnstructuredList{}, err
+func (c *Client) List(ctx context.Context, gvk schema.GroupVersionKind, namespace string) (unstructured.UnstructuredList, error) {
+	if namespace != "" {
+		return c.list(ctx, gvk, &client.ListOptions{Namespace: namespace})
 	}
+	return c.list(ctx, gvk, nil)
+}
+
+func (c *Client) list(ctx context.Context, gvk schema.GroupVersionKind, options *client.ListOptions) (unstructured.UnstructuredList, error) {
+	list := unstructured.UnstructuredList{Items: []unstructured.Unstructured{}}
 
 	list.SetGroupVersionKind(gvk)
-	err = c.Client.List(ctx, &list, &client.ListOptions{LabelSelector: labels.NewSelector().Add(*matchReq)})
+	err := c.Client.List(ctx, &list, options)
 	if err != nil {
 		return unstructured.UnstructuredList{}, err
 	}
@@ -60,17 +62,18 @@ func (c *Client) ListWithLabels(ctx context.Context, gvk schema.GroupVersionKind
 	return list, nil
 }
 
-func (c *Client) GetFirstWithLabel(ctx context.Context, gvk schema.GroupVersionKind, key, value string) (unstructured.Unstructured, error) {
-	list := &unstructured.UnstructuredList{Items: []unstructured.Unstructured{}}
-
+func (c *Client) ListWithLabel(ctx context.Context, gvk schema.GroupVersionKind, key, value string) (unstructured.UnstructuredList, error) {
 	matchReq, err := labels.NewRequirement(key, selection.Equals, []string{value})
 	if err != nil {
-		return unstructured.Unstructured{}, err
+		return unstructured.UnstructuredList{}, err
 	}
 
-	list.SetGroupVersionKind(gvk)
-	err = c.List(ctx, list, &client.ListOptions{LabelSelector: labels.NewSelector().Add(*matchReq)})
-	if err != nil && !errors.IsNotFound(err) {
+	return c.list(ctx, gvk, &client.ListOptions{LabelSelector: labels.NewSelector().Add(*matchReq)})
+}
+
+func (c *Client) GetFirstWithLabel(ctx context.Context, gvk schema.GroupVersionKind, key, value string) (unstructured.Unstructured, error) {
+	list, err := c.ListWithLabel(ctx, gvk, key, value)
+	if err != nil {
 		return unstructured.Unstructured{}, err
 	}
 

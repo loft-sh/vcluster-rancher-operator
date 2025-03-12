@@ -1,16 +1,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: controller-manager
+  name: vcluster-rancher-op
   namespace: system
   labels:
-    control-plane: controller-manager
+    control-plane: vcluster-rancher-op
     app.kubernetes.io/name: vcluster-rancher-op
     app.kubernetes.io/managed-by: kustomize
 spec:
   selector:
     matchLabels:
-      control-plane: controller-manager
+      control-plane: vcluster-rancher-op
       app.kubernetes.io/name: vcluster-rancher-op
   replicas: 1
   template:
@@ -18,7 +18,7 @@ spec:
       annotations:
         kubectl.kubernetes.io/default-container: manager
       labels:
-        control-plane: controller-manager
+        control-plane: vcluster-rancher-op
         app.kubernetes.io/name: vcluster-rancher-op
     spec:
       securityContext:
@@ -55,5 +55,5 @@ spec:
             memory: 64Mi
         volumeMounts: []
       volumes: []
-      serviceAccountName: controller-manager
+      serviceAccountName: vcluster-rancher-op
       terminationGracePeriodSeconds: 10

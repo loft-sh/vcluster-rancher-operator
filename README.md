@@ -1,121 +1,111 @@
 # vcluster-rancher-op
-// TODO(user): Add simple overview of use/purpose
+
+First class vCluster support in Rancher
 
 ## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
 
-## Getting Started
+Deploying a vCluster in rancher should provide the same great experience that provisioning any other cluster in Rancher would. vCluster Rancher Operator automatically integrates vCluster deployments with Rancher. This integration combines the great clusters management of Rancher with the security, cost-effectiveness, and speed of vClusters.
 
-### Prerequisites
-- go version v1.23.0+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
+**Features**
+* creates a Rancher Cluster that corresponds to the vCluster
+* Rancher users do not need cluster management permissions. The operator will create the Rancher cluster.
+* Project owners and project members of the vCluster's project will be added to the Rancher cluster as cluster owners.
+
+**Contents**
+- [Installation](#installation)
+- [How to Use](#how-to-use)
+- [Technical Details](#technical-details)
+- [Development](#development)
+
+## Installation
+To install vCluster Rancher Operator, you can add the loft repository to Rancher and install the vCluster Rancher Operator chart in the local cluster.
+1. Select the local cluster in the Rancher clusters overview page.
+2. In the sidebar, navigate to "Apps" -> "Repositories".
+3. Select "Create".
+4. Set the name to any value and the Index URL to `https://loft.sh/charts`.
+5. In the sidebar, navigate to "Apps" -> "Charts".
+6. Find and select the "vCluster Rancher Operator" chart.
+7. Follow the installation process and install the chart.
+8. In the sidebar, navigate to "Workloads" -> "Deployments". Confirm that the deployment named "vcluster-rancher-op" has the State "Active".
+
+Once the operator is installed, all vClusters deployed in any downstream cluster in rancher will cause a corresponding Rancher cluster to be created, the vCluster to connect to the corresponding Rancher cluster, and cluster owners added.
+
+## Uninstall
+1. Select the local cluster in the Rancher clusters overview page.
+2. In the sidebar, navigate to "Apps" -> "Installed Apps".
+3. Delete the vcluster-rancher-op app. The app will be have the name you gave it during install.
+
+## Technical Details
+
+The vCluster Rancher operator run in the local cluster and watches clusters.management.cattle.io. When a cluster has not been seen by the handler before,
+it creates a client using the Rancher reverse proxy to talk to the downstream cluster. This is done by creating a token, if needed, for the user.management.cattle.io
+that is created during the Helm chart install. The token is then used to authenticate requests to the Rancher proxy.
+
+Once a client is created for a downstream cluster, it is used to watch all services with the label `app=vcluster`. If the vCluster install does not have a corresponding
+Rancher cluster, the installation process begins. The installation process creates a provisioning clusters, waits for Rancher to create the clusterregistrationtoken.cattle.io,
+and then extracts the command from the clusterregistrationtokens status. This command contains everything that is needed to deploy Rancher's cluster agent to the vCluster. A
+job is then deployed in the vCluster's host cluster that creates a kubeconfig pointing the the vCluster service in the host cluster. The earlier extracted command is executed
+using the newly created kubeconfig.
+
+The service event handler then figures out which project the vCluster is installed in. All Rancher users that have a projectroletemplatebidning.cattle.io for the project with either the
+project-owner or project-member roles are added as cluster owners, using a clusterroletemplatebinding.management.cattle.io, to the vCluster Rancher cluster.
+
+Deletion events for the vCluster service will trigger the controller to delete the corresponding Rancher cluster.
+
+## Development
+
+### General Prerequisites
+- docker
+- devespace
+- rancher installed
+- access to local cluster in rancher
 
 ### To Deploy on the cluster
+
+**Deploy the manager using devspace**
+
+Note: This is the recommended way to develop on vcluster-rancher-op
+
+```shell
+devspace dev
+```
 **Build and push your image to the location specified by `IMG`:**
 
 ```sh
 make docker-build docker-push IMG=<some-registry>/vcluster-rancher-op:tag
 ```
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
-
-**Install the CRDs into the cluster:**
+**Deploy the Manager to the cluster using Helm**
 
 ```sh
-make install
+KUBECONFIG=/home/ricardo/dev/rancher-integration/temp-kc.yaml helm install chart --generate-name --create-namespace
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+**Deploy the Manager to the cluster with a custom image**
 
 ```sh
-make deploy IMG=<some-registry>/vcluster-rancher-op:tag
+KUBECONFIG=/home/ricardo/dev/rancher-integration/temp-kc.yaml helm install chart --generate-name --create-namespace --set image.registry=<REGISTRY> --set image.repository=<REPO/REPO> --set tag=<TAG>
 ```
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
-
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
-
+### Update RBAC for installed service account
+1. Update controller-gen tags in the file `controller/cluster-controller.go`.
+2. Run:
 ```sh
-kubectl apply -k config/samples/
+make manifests
 ```
-
->**NOTE**: Ensure that the samples has default values to test it out.
 
 ### To Uninstall
-**Delete the instances (CRs) from the cluster:**
-
+**Delete devspace install:**
 ```sh
-kubectl delete -k config/samples/
+devspace purge
+rm -rf .devspace/*
 ```
 
-**Delete the APIs(CRDs) from the cluster:**
+**Delete helm install:**
 
 ```sh
-make uninstall
+helm delete <release-name>
 ```
-
-**UnDeploy the controller from the cluster:**
-
-```sh
-make undeploy
-```
-
-## Project Distribution
-
-Following the options to release and provide this solution to the users.
-
-### By providing a bundle with all YAML files
-
-1. Build the installer for the image built and published in the registry:
-
-```sh
-make build-installer IMG=<some-registry>/vcluster-rancher-op:tag
-```
-
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
-
-2. Using the installer
-
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
-
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/vcluster-rancher-op/<tag or branch>/dist/install.yaml
-```
-
-### By providing a Helm Chart
-
-1. Build the chart using the optional helm plugin
-
-```sh
-kubebuilder edit --plugins=helm/v1-alpha
-```
-
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
-
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
-
-## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
-
-**NOTE:** Run `make help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
 
 ## License
 
@@ -132,4 +122,3 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-

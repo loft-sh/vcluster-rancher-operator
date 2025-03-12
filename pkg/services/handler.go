@@ -178,7 +178,7 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 	}
 
 	projectRoleTemplateBindings = getMatchingItems[string](projectRoleTemplateBindings, fmt.Sprintf("%s:%s", h.ClusterName, ns.GetLabels()["field.cattle.io/projectId"]), "projectName")
-	projectRoleTemplateBindings = getMatchingItems[string](projectRoleTemplateBindings, "project-owner", "roleTemplateName")
+	projectRoleTemplateBindings.Items = append(getMatchingItems[string](projectRoleTemplateBindings, "project-owner", "roleTemplateName").Items, getMatchingItems[string](projectRoleTemplateBindings, "project-member", "roleTemplateName").Items...)
 
 	forEachErrors := forEachItem(
 		projectRoleTemplateBindings,

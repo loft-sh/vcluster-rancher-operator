@@ -17,10 +17,13 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
+	"github.com/loft-sh/vcluster-rancher-op/pkg/token"
 	"os"
 	"path/filepath"
+	"sigs.k8s.io/controller-runtime/pkg/cluster"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -176,7 +179,25 @@ func main() {
 		})
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	externalLocalCluster, err := cluster.New(ctrl.GetConfigOrDie())
+	if err != nil {
+		setupLog.Error(err, "failed to create kubeconfig for local cluster")
+		os.Exit(1)
+	}
+
+	rancherToken, err := token.GetToken(context.TODO(), unstructured.Client{Client: externalLocalCluster.GetClient()})
+	if err != nil {
+		setupLog.Error(err, "failed to create rancher token")
+		os.Exit(1)
+	}
+
+	restConfig, err := token.RestConfigFromToken("local", rancherToken)
+	if err != nil {
+		setupLog.Error(err, "failed to get rest config for local cluster in rancher proxy")
+		os.Exit(1)
+	}
+
+	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
@@ -201,12 +222,23 @@ func main() {
 	}
 
 	if err = (&clusters.ClusterReconciler{
-		Client: unstructured.Client{Client: mgr.GetClient()},
-		Scheme: mgr.GetScheme(),
+		Client:       unstructured.Client{Client: mgr.GetClient()},
+		Scheme:       mgr.GetScheme(),
+		RancherToken: rancherToken,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Cluster")
+		setupLog.WithValues("controller", "Cluster").Error(err, "unable to create controller")
 		os.Exit(1)
 	}
+
+	/*
+		if err = (&projectroletemplatebindings.PRTBReconciler{
+			Client: unstructured.Client{Client: localCluster.GetClient()},
+			Scheme: mgr.GetScheme(),
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.WithValues("controller", "ProjectRoleTemplateBinding").Error(err, "unable to create controller")
+			os.Exit(1)
+		}*/
+
 	// +kubebuilder:scaffold:builder
 
 	if metricsCertWatcher != nil {

@@ -1,4 +1,4 @@
-package clusters
+package token
 
 import "html/template"
 

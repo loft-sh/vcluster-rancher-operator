@@ -1,4 +1,4 @@
-package controller
+package clusters
 
 import "html/template"
 

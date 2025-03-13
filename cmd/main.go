@@ -26,6 +26,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	"github.com/loft-sh/vcluster-rancher-op/internal/controller/clusters"
 	"github.com/loft-sh/vcluster-rancher-op/pkg/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -37,8 +38,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
-
-	"github.com/loft-sh/vcluster-rancher-op/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -201,7 +200,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.ClusterReconciler{
+	if err = (&clusters.ClusterReconciler{
 		Client: unstructured.Client{Client: mgr.GetClient()},
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {

@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+package clusters
 
 import (
 	"bytes"
@@ -88,10 +88,6 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}()
 
 	if ok {
-		return ctrl.Result{}, nil
-	}
-
-	if req.Name == "c-m-6z5mhg2b" || req.Name == "c-m-fmsf4k4w" {
 		return ctrl.Result{}, nil
 	}
 

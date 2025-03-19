@@ -32,15 +32,15 @@ To install, add the loft charts repository to Rancher, and then install this vCl
 Once the operator is installed:
 * All vClusters deployed in any downstream cluster will cause a corresponding Rancher cluster to be created
 * The vCluster will connect to the corresponding Rancher cluster
-* Any project-member or above will be added as a cluster-owner
+* Any project-member or project-owner will be added as a cluster-owner
 
 ## Uninstall
 
 1. Select the local cluster in the Rancher clusters overview page.
 2. In the sidebar, navigate to "Apps" -> "Installed Apps".
-3. Delete the vcluster-rancher-op app
+3. Delete the vcluster-rancher-op app.
 
-Note that Rancher clusters will not be affected by removing this operator.
+Note that Rancher clusters will not be affected by removing this operator, outside of operations it manages such as RBAC syncing.
 
 ## Technical Details
 
@@ -48,8 +48,7 @@ Note that Rancher clusters will not be affected by removing this operator.
 *Downstream Client*
 
 The vCluster Rancher operator runs in Rancher's local cluster and watches clusters.management.cattle.io. 
-When a cluster has not been seen by the handler before, it creates a client using the Rancher reverse proxy to talk to the downstream cluster. This is done by creating a token, if needed, for the user.management.cattle.io resource
-that is created during the Helm chart install. The token is then used to authenticate requests to the Rancher proxy.
+When a cluster has not been seen by the handler before, it creates a client with a token, using the Rancher reverse proxy to talk to the downstream cluster.
 
 *Rancher Cluster Creation*
 
@@ -60,9 +59,12 @@ A job is then deployed in the vCluster's host cluster that creates a kubeconfig 
 
 Deletion events for the vCluster service will trigger the controller to delete the corresponding Rancher cluster.
 
-*Project Management*
+*Cluster RBAC*
 
-The service event handler then figures out which project the vCluster is installed in. All Rancher users that have a `projectroletemplatebidning.cattle.io` for the project with either the `project-owner` or `project-member` roles are added as cluster owners, using a `clusterroletemplatebinding.management.cattle.io`, to the virtual cluster's Rancher cluster.
+After provisioning a cluster, a `clusters.management.cattle.io` handler is created. This handler acts on `clusters.management.cattle.io` but also watches `projectroletemplatebindings.cattle.io`. The watcher will check if any virtual-cluster originated Rancher clusters are associated with the project targeted by a prtb, and enqueues those clusters if so.
+
+All Rancher users that have a `projectroletemplatebidning.cattle.io` for the project with either the `project-owner` or `project-member` roles are added as cluster owners, using a `clusterroletemplatebinding.management.cattle.io`, to the virtual cluster's Rancher cluster.
+
 
 ## Development
 

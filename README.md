@@ -4,10 +4,10 @@ First class vCluster support in Rancher
 
 ## Description
 
-Deploying a vCluster in rancher should provide the same great experience that provisioning any other cluster in Rancher would. vCluster Rancher Operator automatically integrates vCluster deployments with Rancher. This integration combines the great clusters management of Rancher with the security, cost-effectiveness, and speed of vClusters.
+Deploying a vCluster in rancher should provide the same great experience that provisioning any other cluster in Rancher would. vCluster Rancher Operator automatically integrates vCluster deployments with Rancher. This integration combines the great cluster management of Rancher with the security, cost-effectiveness, and speed of vClusters.
 
 **Features**
-* creates a Rancher Cluster that corresponds to the vCluster
+* Automatically creates a Rancher Cluster that corresponds to each virtual cluster
 * Rancher users do not need cluster management permissions. The operator will create the Rancher cluster.
 * Project owners and project members of the vCluster's project will be added to the Rancher cluster as cluster owners.
 
@@ -18,7 +18,8 @@ Deploying a vCluster in rancher should provide the same great experience that pr
 - [Development](#development)
 
 ## Installation
-To install vCluster Rancher Operator, you can add the loft repository to Rancher and install the vCluster Rancher Operator chart in the local cluster.
+
+To install, add the loft charts repository to Rancher, and then install this vCluster Rancher Operator chart in the local cluster.
 1. Select the local cluster in the Rancher clusters overview page.
 2. In the sidebar, navigate to "Apps" -> "Repositories".
 3. Select "Create".
@@ -28,29 +29,40 @@ To install vCluster Rancher Operator, you can add the loft repository to Rancher
 7. Follow the installation process and install the chart.
 8. In the sidebar, navigate to "Workloads" -> "Deployments". Confirm that the deployment named "vcluster-rancher-op" has the State "Active".
 
-Once the operator is installed, all vClusters deployed in any downstream cluster in rancher will cause a corresponding Rancher cluster to be created, the vCluster to connect to the corresponding Rancher cluster, and cluster owners added.
+Once the operator is installed:
+* All vClusters deployed in any downstream cluster will cause a corresponding Rancher cluster to be created
+* The vCluster will connect to the corresponding Rancher cluster
+* Any project-member or above will be added as a cluster-owner
 
 ## Uninstall
+
 1. Select the local cluster in the Rancher clusters overview page.
 2. In the sidebar, navigate to "Apps" -> "Installed Apps".
-3. Delete the vcluster-rancher-op app. The app will be have the name you gave it during install.
+3. Delete the vcluster-rancher-op app
+
+Note that Rancher clusters will not be affected by removing this operator.
 
 ## Technical Details
 
-The vCluster Rancher operator run in the local cluster and watches clusters.management.cattle.io. When a cluster has not been seen by the handler before,
-it creates a client using the Rancher reverse proxy to talk to the downstream cluster. This is done by creating a token, if needed, for the user.management.cattle.io
+
+*Downstream Client*
+
+The vCluster Rancher operator runs in Rancher's local cluster and watches clusters.management.cattle.io. 
+When a cluster has not been seen by the handler before, it creates a client using the Rancher reverse proxy to talk to the downstream cluster. This is done by creating a token, if needed, for the user.management.cattle.io resource
 that is created during the Helm chart install. The token is then used to authenticate requests to the Rancher proxy.
 
-Once a client is created for a downstream cluster, it is used to watch all services with the label `app=vcluster`. If the vCluster install does not have a corresponding
-Rancher cluster, the installation process begins. The installation process creates a provisioning clusters, waits for Rancher to create the clusterregistrationtoken.cattle.io,
-and then extracts the command from the clusterregistrationtokens status. This command contains everything that is needed to deploy Rancher's cluster agent to the vCluster. A
-job is then deployed in the vCluster's host cluster that creates a kubeconfig pointing the the vCluster service in the host cluster. The earlier extracted command is executed
-using the newly created kubeconfig.
+*Rancher Cluster Creation*
 
-The service event handler then figures out which project the vCluster is installed in. All Rancher users that have a projectroletemplatebidning.cattle.io for the project with either the
-project-owner or project-member roles are added as cluster owners, using a clusterroletemplatebinding.management.cattle.io, to the vCluster Rancher cluster.
+Once a client is created for each downstream cluster, it is used to watch all services with the label `app=vcluster`. If a virtual cluster install is found which does not have a corresponding Rancher cluster, the installation process begins. 
+The installation process creates a provisioning cluster, waits for Rancher to create the `clusterregistrationtoken.cattle.io`,
+and then extracts the command from the `clusterregistrationtoken` status. This command contains everything that is needed to deploy Rancher's cluster agent to the vCluster.
+A job is then deployed in the vCluster's host cluster that creates a kubeconfig pointing to the vCluster service in the host cluster. The earlier extracted command is executed using the newly created kubeconfig.
 
 Deletion events for the vCluster service will trigger the controller to delete the corresponding Rancher cluster.
+
+*Project Management*
+
+The service event handler then figures out which project the vCluster is installed in. All Rancher users that have a `projectroletemplatebidning.cattle.io` for the project with either the `project-owner` or `project-member` roles are added as cluster owners, using a `clusterroletemplatebinding.management.cattle.io`, to the virtual cluster's Rancher cluster.
 
 ## Development
 

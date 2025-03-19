@@ -61,7 +61,7 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 		return errors2.New("object is not a service, skipping")
 	}
 
-	logger := h.Logger.WithValues("vclusterName", service.Name, "hostCluster", h.ClusterName, "action", "add")
+	logger := h.Logger.WithValues("vclusterName", service.Name, "vclusterNamespace", service.Namespace, "hostCluster", h.ClusterName, "action", "add")
 
 	if service.Spec.ClusterIP == "None" {
 		// skip headless service
@@ -71,6 +71,16 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 	ns, err := h.ClusterClient.CoreV1().Namespaces().Get(h.Ctx, service.Namespace, v1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to get vCluster's namespace [%s]: %w", service.Namespace, err)
+	}
+
+	pods, err := h.ClusterClient.CoreV1().Pods(service.Namespace).List(h.Ctx, v1.ListOptions{LabelSelector: "app=cattle-cluster-agent"})
+	if err != nil {
+		return fmt.Errorf("failed listing rancher cluster agent pods: %w", err)
+	}
+
+	if len(pods.Items) > 0 {
+		logger.Info("a rancher cluster agent pod already exists in namespace, skipping")
+		return nil
 	}
 
 	project, err := h.LocalUnstructuredClient.Get(h.Ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "Project"}, ns.GetLabels()["field.cattle.io/projectId"], h.ClusterName)

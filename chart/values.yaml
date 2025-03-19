@@ -4,4 +4,4 @@ image:
   registry: "ghcr.io"
   repository: vcluster-rancher-op
   pullPolicy: IfNotPresent
-  tag: "v0.0.3"
+  tag: "v0.0.4"

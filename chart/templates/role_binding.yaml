@@ -12,4 +12,4 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: vcluster-rancher-op
-  namespace: system
+  namespace: {{ .Release.Namespace }}

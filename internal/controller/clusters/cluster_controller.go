@@ -18,12 +18,13 @@ package clusters
 
 import (
 	"context"
+	"crypto/sha256"
 	errors3 "errors"
 	"fmt"
-	"github.com/go-logr/logr"
 	"strings"
 	"sync"
 
+	"github.com/go-logr/logr"
 	"github.com/loft-sh/vcluster-rancher-op/pkg/services"
 	"github.com/loft-sh/vcluster-rancher-op/pkg/token"
 	"github.com/loft-sh/vcluster-rancher-op/pkg/unstructured"
@@ -32,8 +33,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	v1unstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
@@ -154,7 +157,12 @@ func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logg
 	return nil
 }
 
-// TODO move this to reocncile, delete rbac logic in services handler, and test
+// SyncRancherRBAC adds creates cluster owners in a vCluster's Rancher cluster based on ProjectRoleTemplateBindings (PRTBs) targeting the project it is installed in and
+// ClusterRoleTemplateBindings (CRTBs) targeting the host rancher cluster it is installed in. Only RoleTemplateBindings (RTBs- this refers to CRTBs and PRTBs and is not an
+// actual type) that have specific roleTemplate names will cause a user to be added as a cluster owner of the vCluster rancher cluster. The relevant PRTB roleTemplateNames
+// are "project-member" and "project-owner". The relevant CRTB roleTemplateNames are "cluster-member" and "cluster-project". The PRTB or CRTB that led to the creation of
+// the cluster owner CRTB is the CRTB's "parent-prtb" or "parent-crtb" respectively. Once the CRTBs parent is deleted, the CRTB will be deleted, removing the user as a
+// cluster owner from the vCluster's Rancher cluster.
 func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Logger, managementCluster v1unstructured.Unstructured) error {
 	projectUID := managementCluster.GetLabels()["loft.sh/vcluster-project-uid"]
 	projectName := managementCluster.GetLabels()["loft.sh/vcluster-project"]
@@ -186,15 +194,31 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 	projectRoleTemplateBindings = unstructured.FilterItems[string](projectRoleTemplateBindings, fmt.Sprintf("%s:%s", project.GetNamespace(), project.GetName()), true, "projectName")
 	projectRoleTemplateBindings.Items = append(unstructured.FilterItems[string](projectRoleTemplateBindings, "project-owner", true, "roleTemplateName").Items, unstructured.FilterItems[string](projectRoleTemplateBindings, "project-member", true, "roleTemplateName").Items...)
 
+	requirement, err := labels.NewRequirement("loft.sh/vcluster-service-uid", selection.DoesNotExist, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create requirement that filters for ClusterRoleTemplateBindings without loft.sh/vcluster-service-uid label: %w", err)
+	}
+	clusterRoleTemplateBindings, err := r.Client.ListWithOptions(ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ClusterRoleTemplateBinding"}, &client.ListOptions{Namespace: hostClusterName, LabelSelector: labels.NewSelector().Add(*requirement)})
+	if err != nil {
+		return fmt.Errorf("failed to list clusterRoleTemplateBindings that target vCluster's host cluster [%s]: %w", hostClusterName, err)
+	}
+
+	clusterRoleTemplateBindings = unstructured.FilterItems[string](clusterRoleTemplateBindings, "cluster-owner", true, "roleTemplateName")
+
+	roleTemplateBindings := v1unstructured.UnstructuredList{Items: append(projectRoleTemplateBindings.Items, clusterRoleTemplateBindings.Items...)}
+
+	clusterOwners := make(map[string]struct{})
 	forEachErrors := unstructured.ForEachItem(
-		projectRoleTemplateBindings,
+		roleTemplateBindings,
 		func(_ int, item v1unstructured.Unstructured) error {
 			user := unstructured.GetNested[string](item.Object, "userName")
 			if user == "" {
 				return fmt.Errorf("user cannot be empty string")
 			}
 
-			_, err := r.Client.Get(ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ClusterRoleTemplateBinding"}, fmt.Sprintf("vc-%s-co", item.GetName()), managementCluster.GetName())
+			clusterOwners[user] = struct{}{}
+
+			_, err := r.Client.Get(ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ClusterRoleTemplateBinding"}, fmt.Sprintf("vcluster-%s-co", user), managementCluster.GetName())
 			if err != nil && !errors.IsNotFound(err) {
 				return err
 			}
@@ -203,14 +227,19 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 				return nil
 			}
 
+			parentLabel := "loft.sh/parent-prtb"
+			if item.GetKind() == "ClusterRoleTemplateBinding" {
+				parentLabel = "loft.sh/parent-crtb"
+			}
+
 			_, err = r.Client.Create(
 				ctx,
 				schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ClusterRoleTemplateBinding"},
-				fmt.Sprintf("vc-%s-co", item.GetName()),
+				fmt.Sprintf("vcluster-%s-co", user),
 				managementCluster.GetName(), false,
 				map[string]string{
 					"loft.sh/vcluster-service-uid": managementCluster.GetLabels()["loft.sh/vcluster-service-uid"],
-					"loft.sh/parent-prtb":          item.GetName(),
+					parentLabel:                    item.GetName(),
 				},
 				map[string]interface{}{
 					"userName":         user,
@@ -226,9 +255,14 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 	}
 
 	// cleanup ClusterRoleTemplateBindings
-	crtbs, err := r.Client.List(ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ClusterRoleTemplateBinding"}, managementCluster.GetName())
+	requirement, err = labels.NewRequirement("loft.sh/vcluster-service-uid", selection.Equals, []string{managementCluster.GetLabels()["loft.sh/vcluster-service-uid"]})
 	if err != nil {
-		return fmt.Errorf("failed to list ClusterRoleTemplateBindings that target vCluster's Rancher clluster [%s]: %w", managementCluster.GetName(), err)
+		return fmt.Errorf("failed to create requirement that filters for ClusterRoleTemplateBindings with loft.sh/vcluster-service-uid label: %w", err)
+	}
+
+	crtbs, err := r.Client.ListWithOptions(ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ClusterRoleTemplateBinding"}, &client.ListOptions{Namespace: managementCluster.GetName(), LabelSelector: labels.NewSelector().Add(*requirement)})
+	if err != nil {
+		return fmt.Errorf("failed to list ClusterRoleTemplateBindings that target vCluster's rancher cluster [%s]: %w", managementCluster.GetName(), err)
 	}
 
 	if len(crtbs.Items) == 0 {
@@ -236,23 +270,15 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 	}
 
 	forEachErrors = unstructured.ForEachItem(crtbs, func(index int, item v1unstructured.Unstructured) error {
-		parentPRTBName := item.GetLabels()["loft.sh/parent-prtb"]
-		if parentPRTBName == "" {
+		user := unstructured.GetNested[string](item.Object, "userName")
+		if user == "" {
+			return fmt.Errorf("user cannot be empty string")
+		}
+
+		if _, ok := clusterOwners[user]; ok {
+			// CRTB is still backed by valid RTB, no-op
 			return nil
 		}
-
-		parentPRTB, err := r.Client.Get(ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ProjectRoleTemplateBinding"}, parentPRTBName, projectName)
-		if err != nil && !errors.IsNotFound(err) {
-			// returns on nil as well
-			return fmt.Errorf("failed to get parent PRTB [%s] for CRTB [%s]: %w", parentPRTBName, fmt.Sprintf("%s/%s", item.GetNamespace(), item.GetName()), err)
-		}
-
-		parentPRTBRole := unstructured.GetNested[string](parentPRTB.Object, "roleTemplateName")
-		if parentPRTBRole == "project-owner" || parentPRTBRole == "project-member" {
-			// CRTB is still backed by valid PRTB, no-op
-			return nil
-		}
-
 		err = r.Client.Delete(ctx, &item)
 		if err != nil && !errors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete crtb mapped to deleted PRTB [%s/%s]: %w", item.GetNamespace(), item.GetName(), err)
@@ -266,6 +292,7 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Watches(&v1unstructured.Unstructured{Object: map[string]interface{}{"kind": "ProjectRoleTemplateBinding", "apiVersion": "management.cattle.io/v3"}}, handler.EnqueueRequestsFromMapFunc(r.clustersRelatedToTargetProject), builder.WithPredicates(predicate.ResourceVersionChangedPredicate{})).
+		Watches(&v1unstructured.Unstructured{Object: map[string]interface{}{"kind": "ClusterRoleTemplateBinding", "apiVersion": "management.cattle.io/v3"}}, handler.EnqueueRequestsFromMapFunc(r.clustersHostedByClusterTarget), builder.WithPredicates(predicate.ResourceVersionChangedPredicate{})).
 		// Uncomment the following line adding a pointer to an instance of the controlled resource as an argument
 		For(&v1unstructured.Unstructured{Object: map[string]interface{}{"kind": "Cluster", "apiVersion": "management.cattle.io/v3"}}).
 		Named("cluster").
@@ -297,10 +324,31 @@ func (r *ClusterReconciler) clustersRelatedToTargetProject(ctx context.Context, 
 	return requests
 }
 
+func (r *ClusterReconciler) clustersHostedByClusterTarget(ctx context.Context, obj client.Object) []reconcile.Request {
+	crtb := obj.(*v1unstructured.Unstructured)
+	clusterName := unstructured.GetNested[string](crtb.Object, "clusterName")
+
+	clusters, err := r.Client.ListWithLabel(ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "Cluster"}, "loft.sh/vcluster-host-cluster", clusterName)
+	if err != nil {
+		return nil
+	}
+
+	requests := make([]reconcile.Request, len(clusters.Items))
+	unstructured.ForEachItem(clusters, func(index int, item v1unstructured.Unstructured) error {
+		requests[index] = reconcile.Request{NamespacedName: types.NamespacedName{Name: item.GetName()}}
+		return nil
+	})
+	return requests
+}
+
 func parseHalves(name, separator string) (string, string, error) {
 	parts := strings.Split(name, separator)
 	if len(parts) != 2 {
 		return "", "", errors3.New("invalid project name [%s], expect to have the format <cluster-id:project-id>")
 	}
 	return parts[0], parts[1], nil
+}
+
+func hashID(id string) string {
+	return fmt.Sprintf("%x", sha256.New().Sum([]byte(id))[:10])
 }

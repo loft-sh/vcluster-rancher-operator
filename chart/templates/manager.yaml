@@ -22,12 +22,16 @@ spec:
         app.kubernetes.io/name: vcluster-rancher-op
     spec:
       securityContext:
-        runAsNonRoot: false # changed this for devspace, can change it back
+        runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
       containers:
-      - image: {{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}
-        name: manager
+      - name: manager
+        {{- if .Values.image }}
+        image: "{{ .Values.hostpathMapper.image }}"
+        {{- else }}
+        image: "{{ .Values.defaultImageRegistry }}ghcr.io/loft-sh/vcluster-rancher-op:{{ .Chart.Version }}"
+        {{- end }}
         ports: []
         securityContext:
           allowPrivilegeEscalation: false

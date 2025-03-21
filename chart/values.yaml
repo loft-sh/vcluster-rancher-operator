@@ -1,7 +1,3 @@
 replicaCount: 1
 
-image:
-  registry: "ghcr.io"
-  repository: vcluster-rancher-op
-  pullPolicy: IfNotPresent
-  tag: "v0.0.4"
+defaultImageRegistry: "{{ .Values.defaultImageRegistry }}ghcr.io/loft-sh/vcluster-rancher-op:{{ .Chart.Version }}"

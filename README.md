@@ -9,7 +9,7 @@ Deploying a vCluster in rancher should provide the same great experience that pr
 **Features**
 * creates a Rancher Cluster that corresponds to the vCluster
 * Rancher users do not need cluster management permissions. The operator will create the Rancher cluster.
-* Project owners and project members of the vCluster's project will be added to the Rancher cluster as cluster owners.
+* Project owners and project members of the virtual cluster's project, as well as the cluster owner, will be added to the new Rancher cluster as cluster owners.
 
 **Contents**
 - [Installation](#installation)

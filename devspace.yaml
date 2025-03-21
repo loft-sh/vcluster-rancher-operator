@@ -24,7 +24,7 @@ images:
   app:
     image: controller
     tags:
-    - 'v0.0.1'
+    - 'v0.0.1-rc1'
     dockerfile: ./Dockerfile
 
 # This is a list of `deployments` that DevSpace can create for this project
@@ -39,7 +39,7 @@ deployments:
 dev:
   app:
     # Search for the container that runs this image
-    imageSelector: ghcr.io/vcluster-rancher-op:v0.0.4
+    imageSelector: ghcr.io/vcluster-rancher-op:v0.0.1-rc1
     # Replace the container image with this dev-optimized image (allows to skip image building during development)
     devImage: ghcr.io/loft-sh/devspace-containers/go:1.23-alpine
     # Sync files between the local filesystem and the development container

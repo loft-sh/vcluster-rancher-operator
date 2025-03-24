@@ -28,15 +28,12 @@ type Handler struct {
 	LocalUnstructuredClient unstructured.Client
 
 	Lock                      sync.RWMutex
-	status                    importStatus
 	ClusterUnstructuredClient unstructured.Client
 	ClusterClient             *kubernetes.Clientset
 	ClusterName               string
 }
 
 var _ cache.ResourceEventHandler = (*Handler)(nil)
-
-type importStatus string
 
 func (h *Handler) OnAdd(obj interface{}, isInInitialList bool) {
 	err := h.deployvClusterRancherCluster(obj)

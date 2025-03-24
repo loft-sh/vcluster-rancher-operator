@@ -18,7 +18,6 @@ package clusters
 
 import (
 	"context"
-	"crypto/sha256"
 	errors3 "errors"
 	"fmt"
 	"strings"
@@ -285,6 +284,9 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 		}
 		return nil
 	})
+	if forEachErrors != nil {
+		return errors2.AggregateError(forEachErrors)
+	}
 	return nil
 }
 
@@ -347,8 +349,4 @@ func parseHalves(name, separator string) (string, string, error) {
 		return "", "", errors3.New("invalid project name [%s], expect to have the format <cluster-id:project-id>")
 	}
 	return parts[0], parts[1], nil
-}
-
-func hashID(id string) string {
-	return fmt.Sprintf("%x", sha256.New().Sum([]byte(id))[:10])
 }

@@ -26,7 +26,7 @@ func (c *Client) Get(ctx context.Context, gvk schema.GroupVersionKind, name, nam
 	return obj, nil
 }
 
-func (c *Client) Create(ctx context.Context, gvk schema.GroupVersionKind, name, namespace string, genName bool, labels map[string]string, object map[string]interface{}) (unstructured.Unstructured, error) {
+func (c *Client) Create(ctx context.Context, gvk schema.GroupVersionKind, name, namespace string, genName bool, labels map[string]string, finalizers []string, object map[string]interface{}) (unstructured.Unstructured, error) {
 	obj := unstructured.Unstructured{Object: object}
 	obj.SetNamespace(namespace)
 	if genName {
@@ -36,6 +36,7 @@ func (c *Client) Create(ctx context.Context, gvk schema.GroupVersionKind, name, 
 	}
 	obj.SetGroupVersionKind(gvk)
 	obj.SetLabels(labels)
+	obj.SetFinalizers(finalizers)
 	err := c.Client.Create(ctx, &obj)
 	if err != nil {
 		return unstructured.Unstructured{}, err

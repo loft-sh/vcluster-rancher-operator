@@ -17,13 +17,20 @@ limitations under the License.
 package clusters
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	errors3 "errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"slices"
 	"strings"
 	"sync"
 
 	"github.com/go-logr/logr"
+	"github.com/loft-sh/vcluster-rancher-op/pkg/rancher"
 	"github.com/loft-sh/vcluster-rancher-op/pkg/services"
 	"github.com/loft-sh/vcluster-rancher-op/pkg/token"
 	"github.com/loft-sh/vcluster-rancher-op/pkg/unstructured"
@@ -37,8 +44,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -49,6 +58,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
+
+var httpClient = http.Client{
+	Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+		},
+	},
+}
 
 // ClusterReconciler reconciles a Cluster object
 type ClusterReconciler struct {
@@ -71,22 +88,39 @@ type ClusterReconciler struct {
 func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	logger.Info("enqueue " + req.Name)
 	managementCluster, err := r.Client.Get(ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "Cluster"}, req.Name, "")
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+
+	restConfig, err := token.RestConfigFromToken(managementCluster.GetName(), r.RancherToken)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	logger.Info("debugenq 1")
+	clusterClient, unstructClusterClient, err := getClusterClient(restConfig)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	err = r.SyncCleanup(ctx, logger, managementCluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	err = r.SyncRancherRBAC(ctx, logger, managementCluster)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	err = r.SyncvClusterInstallHandler(ctx, logger, managementCluster.GetName())
+	err = r.SyncvClusterInstallHandler(ctx, logger, clusterClient, unstructClusterClient, managementCluster.GetName())
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -95,23 +129,13 @@ type TestCluster struct {
 	metav1.TypeMeta
 }
 
-func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logger logr.Logger, clusterName string) error {
+func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logger logr.Logger, clusterClient *kubernetes.Clientset, unstructuredClusterClient unstructured.Client, clusterName string) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 	_, ok := r.peers[clusterName]
 
 	if ok {
 		return nil
-	}
-
-	restConfig, err := token.RestConfigFromToken(clusterName, r.RancherToken)
-	if err != nil {
-		return err
-	}
-
-	clusterClient, err := kubernetes.NewForConfig(restConfig)
-	if err != nil {
-		return err
 	}
 
 	sharedInformer := cache.NewSharedInformer(&cache.ListWatch{
@@ -125,19 +149,13 @@ func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logg
 		},
 	}, &v1.Service{}, 0)
 
-	unstructuredClusterClient, err := cluster.New(restConfig)
-	if err != nil {
-		return err
-	}
-	_, err = sharedInformer.AddEventHandler(&services.Handler{
-		Ctx:                     ctx,
-		Logger:                  logger,
-		LocalUnstructuredClient: r.Client,
-		ClusterUnstructuredClient: unstructured.Client{
-			Client: unstructuredClusterClient.GetClient(),
-		},
-		ClusterClient: clusterClient,
-		ClusterName:   clusterName,
+	_, err := sharedInformer.AddEventHandler(&services.Handler{
+		Ctx:                       ctx,
+		Logger:                    logger,
+		LocalUnstructuredClient:   r.Client,
+		ClusterUnstructuredClient: unstructuredClusterClient,
+		ClusterClient:             clusterClient,
+		ClusterName:               clusterName,
 	})
 	if err != nil {
 		return err
@@ -154,6 +172,20 @@ func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logg
 		logger.Info(fmt.Sprintf("finished running handler for %s's vclusters\n", clusterName))
 	}()
 	return nil
+}
+
+func getClusterClient(restConfig *rest.Config) (*kubernetes.Clientset, unstructured.Client, error) {
+	clusterClient, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return nil, unstructured.Client{}, err
+	}
+
+	clusterConfig, err := cluster.New(restConfig)
+	if err != nil {
+		return nil, unstructured.Client{}, err
+	}
+
+	return clusterClient, unstructured.Client{Client: clusterConfig.GetClient()}, nil
 }
 
 // SyncRancherRBAC adds creates cluster owners in a vCluster's Rancher cluster based on ProjectRoleTemplateBindings (PRTBs) targeting the project it is installed in and
@@ -240,6 +272,7 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 					"loft.sh/vcluster-service-uid": managementCluster.GetLabels()["loft.sh/vcluster-service-uid"],
 					parentLabel:                    item.GetName(),
 				},
+				nil,
 				map[string]interface{}{
 					"userName":         user,
 					"clusterName":      managementCluster.GetName(),
@@ -286,6 +319,68 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 	})
 	if forEachErrors != nil {
 		return errors2.AggregateError(forEachErrors)
+	}
+	return nil
+}
+
+func (r *ClusterReconciler) SyncCleanup(ctx context.Context, logger logr.Logger, managementCluster v1unstructured.Unstructured) error {
+	if managementCluster.GetDeletionTimestamp() == nil {
+		return nil
+	}
+
+	if managementCluster.GetLabels()["loft.sh/target-app"] == "" {
+		return nil
+	}
+
+	logger = logger.WithValues("vclusterAppName", managementCluster.GetLabels()["loft.sh/target-app"])
+	appNamespace, appName, err := parseHalves(managementCluster.GetLabels()["loft.sh/target-app"], "_")
+	if err != nil {
+		return fmt.Errorf("failed to parse app namespace and name from management clusters \"loft.sh/target-app\" annotation")
+	}
+
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/v1/catalog.cattle.io.apps/%s/%s?", rancher.GetClusterEndpoint(managementCluster.GetLabels()["loft.sh/vcluster-host-cluster"]), appNamespace, appName)+url.PathEscape("action=uninstall"), bytes.NewBuffer([]byte("{}")))
+	if err != nil {
+		return fmt.Errorf("could not create request for vcluster app uninstal: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+r.RancherToken)
+	req.Method = "POST"
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("fai")
+	}
+
+	obj := &struct {
+		Code string `json:"code,omitempty"`
+	}{}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("could not read body for response to rancher app uninstall: %w", err)
+	}
+
+	err = json.Unmarshal(body, obj)
+	if err != nil {
+		return fmt.Errorf("could not unmarshal response from rancher app uninstall: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK && obj.Code != "NotFound" {
+		return errors3.New("app uninstall failed for app")
+	}
+
+	logger.Info("cleaning up...")
+	if !slices.Contains(managementCluster.GetFinalizers(), "loft.sh/vcluster-app-cleanup") {
+		logger.Info("nothing to cleanup, exiting")
+		return nil
+	}
+
+	for index, value := range managementCluster.GetFinalizers() {
+		if value == "loft.sh/vcluster-app-cleanup" {
+			managementCluster.SetFinalizers(slices.Delete(managementCluster.GetFinalizers(), index, index+1))
+			err = r.Client.Update(ctx, &managementCluster)
+			if err != nil && !errors.IsNotFound(err) {
+				return fmt.Errorf("failed to remov")
+			}
+			break
+		}
 	}
 	return nil
 }

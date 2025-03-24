@@ -5,15 +5,12 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/loft-sh/vcluster-rancher-op/pkg/rancher"
 	"github.com/loft-sh/vcluster-rancher-op/pkg/unstructured"
 	"github.com/rancher/wrangler/pkg/randomtoken"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-)
-
-const (
-	clusterEndpointFmt = "https://rancher.cattle-system/k8s/clusters/%s"
 )
 
 type data struct {
@@ -53,6 +50,7 @@ func GetToken(ctx context.Context, client unstructured.Client) (string, error) {
 		"",
 		false,
 		map[string]string{"loft.sh/vcluster-rancher-system-token": "true"},
+		nil,
 		map[string]interface{}{
 			"authProvider": "local",
 			"userId":       systemUser.GetName(),
@@ -65,7 +63,7 @@ func GetToken(ctx context.Context, client unstructured.Client) (string, error) {
 }
 
 func RestConfigFromToken(clusterID, token string) (*rest.Config, error) {
-	kubeConfig, err := ForTokenBased(clusterID, fmt.Sprintf(clusterEndpointFmt, clusterID), token)
+	kubeConfig, err := ForTokenBased(clusterID, rancher.GetClusterEndpoint(clusterID), token)
 	if err != nil {
 		return nil, err
 	}

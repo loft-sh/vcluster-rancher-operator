@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
-	"github.com/cenkalti/backoff/v4"
 	"github.com/go-logr/logr"
 	"github.com/loft-sh/vcluster-rancher-op/pkg/unstructured"
 	batchv1 "k8s.io/api/batch/v1"
@@ -16,6 +16,7 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	v1unstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 )
@@ -108,6 +109,7 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 				"loft.sh/vcluster-project":      project.GetName(),
 				"loft.sh/vcluster-host-cluster": h.ClusterName,
 			},
+			nil,
 			nil)
 		if err != nil && !errors.IsAlreadyExists(err) {
 			return fmt.Errorf("errors creating provisioning cluster for vCluster instance: %w", err)
@@ -120,24 +122,43 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 	}
 
 	var managementCluster, clusterRegistrationToken v1unstructured.Unstructured
-	err = backoff.Retry(
+	err = wait.ExponentialBackoff(wait.Backoff{Duration: 100 * time.Millisecond, Steps: 20, Factor: 1.5},
 		// the use of a backoff retry here is justifiable because we are not using a normal framework that will retry on error on our behalf.
-		func() error {
+		func() (bool, error) {
 			logger.Info("waiting for rancher to create management cluster for vCluster")
 			managementCluster, err = h.LocalUnstructuredClient.GetFirstWithLabel(h.Ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "Cluster"}, "loft.sh/vcluster-service-uid", string(service.GetUID()))
 			if err != nil {
-				return fmt.Errorf("failed to get management cluster for vCluster: %w", err)
+				if errors.IsNotFound(err) {
+					return false, nil
+				}
+				return false, fmt.Errorf("failed to get management cluster for vCluster: %w", err)
 			}
 			logger.Info("successfully retrieved management cluster for vCluster")
+
+			if service.GetAnnotations()["loft.sh/uninstall-on-cluster-delete"] == "true" {
+				managementCluster.SetFinalizers([]string{"loft.sh/vcluster-app-cleanup"})
+				// for some reason setting annotations on the management cluster before its admission webhook deploys stops the agent from installing, so a label is used here
+				managementCluster.SetLabels(map[string]string{"loft.sh/target-app": fmt.Sprintf("%s_%s", service.Annotations["meta.helm.sh/release-namespace"], service.Annotations["meta.helm.sh/release-name"])})
+				err = h.LocalUnstructuredClient.Update(h.Ctx, &managementCluster)
+				if err != nil {
+					if errors.IsConflict(err) {
+						return false, nil
+					}
+					return false, fmt.Errorf("failed to add ap cleanup finalizer \"loft.sh/uninstall-on-cluster-delete\" to management cluster: %w", err)
+				}
+			}
 
 			logger.Info("waiting for rancher to create cluster registration token for vCluster")
 			clusterRegistrationToken, err = h.LocalUnstructuredClient.Get(h.Ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ClusterRegistrationToken"}, "default-token", managementCluster.GetName())
 			if err != nil {
-				return fmt.Errorf("failed to get cluster registration token for vCluster: %w", err)
+				if errors.IsNotFound(err) {
+					return false, nil
+				}
+				return false, fmt.Errorf("failed to get cluster registration token for vCluster: %w", err)
 			}
 			logger.Info("successfully retrieved cluster registration token for vCluster")
-			return nil
-		}, backoff.NewExponentialBackOff())
+			return true, nil
+		})
 	if err != nil {
 		return fmt.Errorf("failed waiting for rancher to create resource(s) for vCluster: %w", err)
 	}
@@ -218,7 +239,10 @@ func (h *Handler) deletevClusterRancherCluster(obj interface{}) error {
 	logger.Info("deleting vCluster's rancher cluster")
 
 	provisioningCluster, err := h.LocalUnstructuredClient.GetFirstWithLabel(h.Ctx, schema.GroupVersionKind{Group: "provisioning.cattle.io", Version: "v1", Kind: "Cluster"}, "loft.sh/vcluster-service-uid", string(service.GetUID()))
-	if err != nil && !errors.IsNotFound(err) {
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
 		return fmt.Errorf("error getting provisioning cluster for vCluster instance: %w", err)
 	}
 

@@ -22,7 +22,7 @@ spec:
         app.kubernetes.io/name: vcluster-rancher-op
     spec:
       securityContext:
-        runAsNonRoot: true
+        runAsNonRoot: false
         seccompProfile:
           type: RuntimeDefault
       containers:

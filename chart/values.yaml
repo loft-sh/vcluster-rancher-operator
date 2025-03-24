@@ -5,4 +5,7 @@ global:
   cattle:
     systemDefaultRegistry: ""
 
-image: ""
+image:
+  registry: "ghcr.io"
+  repository: "loft-sh/vcluster-rancher-operator"
+  tag: ""

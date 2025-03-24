@@ -27,13 +27,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: manager
-        {{- if .Values.global.cattle.systemDefaultRegistry }}
-        image: "{{ .Values.global.cattle.systemDefaultRegistry }}/loft-sh/vcluster-rancher-op:{{ .Chart.Version }}"
-        {{- else if .Values.image }}
-        image: "{{ .Values.image }}"
-        {{- else }}
-        image: "ghcr.io/loft-sh/vcluster-rancher-op:{{ .Chart.Version }}"
-        {{- end }}
+        image: "{{ template "default_registry" . }}{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.Version }}"
         ports: []
         securityContext:
           allowPrivilegeEscalation: false

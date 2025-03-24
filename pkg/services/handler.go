@@ -65,6 +65,11 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 		return nil
 	}
 
+	if service.Annotations["loft.sh/vcluster-skip-import"] == "true" {
+		logger.Info("service annotation \"loft.sh/vcluster-skip-import\" set to \"true\". Skipping import.")
+		return nil
+	}
+
 	ns, err := h.ClusterClient.CoreV1().Namespaces().Get(h.Ctx, service.Namespace, v1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to get vCluster's namespace [%s]: %w", service.Namespace, err)

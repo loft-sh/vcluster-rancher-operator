@@ -1,3 +1,1 @@
 replicaCount: 1
-
-defaultImageRegistry: "{{ .Values.defaultImageRegistry }}ghcr.io/loft-sh/vcluster-rancher-op:{{ .Chart.Version }}"

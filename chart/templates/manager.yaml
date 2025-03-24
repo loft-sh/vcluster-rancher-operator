@@ -28,9 +28,9 @@ spec:
       containers:
       - name: manager
         {{- if .Values.image }}
-        image: "{{ .Values.hostpathMapper.image }}"
+        image: "{{ .Values.image }}"
         {{- else }}
-        image: "{{ .Values.defaultImageRegistry }}ghcr.io/loft-sh/vcluster-rancher-op:{{ .Chart.Version }}"
+        image: "ghcr.io/loft-sh/vcluster-rancher-op:{{ .Chart.Version }}"
         {{- end }}
         ports: []
         securityContext:

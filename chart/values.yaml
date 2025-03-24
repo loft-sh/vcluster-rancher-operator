@@ -1,1 +1,8 @@
 replicaCount: 1
+
+# this is necessary in order to support rancher's default system registry
+global:
+  cattle:
+    systemDefaultRegistry: ""
+
+image: ""

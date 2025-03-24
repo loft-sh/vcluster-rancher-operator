@@ -141,6 +141,7 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 	}
 
 	command := unstructured.GetNested[string](clusterRegistrationToken.Object, "status", "insecureCommand")
+	deleteTTL := int32(0)
 
 	logger.Info("creating job to deploy rancher cluster agent in vCluster")
 	job := batchv1.Job{
@@ -187,6 +188,7 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 					},
 				},
 			},
+			TTLSecondsAfterFinished: &deleteTTL,
 		},
 	}
 	err = h.ClusterUnstructuredClient.Client.Create(h.Ctx, &job)

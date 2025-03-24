@@ -2,6 +2,7 @@ package unstructured
 
 import (
 	"context"
+
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -102,7 +103,7 @@ func GetNested[T any](obj map[string]interface{}, keys ...string) T {
 }
 
 func FilterItems[T comparable](list unstructured.UnstructuredList, filter T, mustEqual bool, keys ...string) unstructured.UnstructuredList {
-	var matchingItems []unstructured.Unstructured
+	var matchingItems []unstructured.Unstructured //nolint:prealloc // slice capacity needed could be any size from 0 to length of list.items. Possible performance gain is negligible
 	for _, item := range list.Items {
 		value := GetNested[T](item.Object, keys...)
 		if (mustEqual && value != filter) || (!mustEqual && value == filter) {

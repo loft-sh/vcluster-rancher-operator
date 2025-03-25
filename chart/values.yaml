@@ -7,5 +7,5 @@ global:
 
 image:
   registry: "ghcr.io"
-  repository: "loft-sh/vcluster-rancher-operator"
+  repository: "loft-sh/vcluster-rancher-op"
   tag: ""

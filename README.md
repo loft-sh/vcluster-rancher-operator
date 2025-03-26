@@ -1,4 +1,4 @@
-# vcluster-rancher-op
+# vcluster-rancher-operator
 
 First class vCluster support in Rancher
 
@@ -26,14 +26,14 @@ To install vCluster Rancher Operator, you can add the loft repository to Rancher
 5. In the sidebar, navigate to "Apps" -> "Charts".
 6. Find and select the "vCluster Rancher Operator" chart.
 7. Follow the installation process and install the chart.
-8. In the sidebar, navigate to "Workloads" -> "Deployments". Confirm that the deployment named "vcluster-rancher-op" has the State "Active".
+8. In the sidebar, navigate to "Workloads" -> "Deployments". Confirm that the deployment named "vcluster-rancher-operator" has the State "Active".
 
 Once the operator is installed, all vClusters deployed in any downstream cluster in rancher will cause a corresponding Rancher cluster to be created, the vCluster to connect to the corresponding Rancher cluster, and cluster owners added.
 
 ## Uninstall
 1. Select the local cluster in the Rancher clusters overview page.
 2. In the sidebar, navigate to "Apps" -> "Installed Apps".
-3. Delete the vcluster-rancher-op app. The app will be have the name you gave it during install.
+3. Delete the vcluster-rancher-operator app. The app will be have the name you gave it during install.
 
 ## Technical Details
 
@@ -64,7 +64,7 @@ Deletion events for the vCluster service will trigger the controller to delete t
 
 **Deploy the manager using devspace**
 
-Note: This is the recommended way to develop on vcluster-rancher-op
+Note: This is the recommended way to develop on vcluster-rancher-operator
 
 ```shell
 devspace dev
@@ -72,7 +72,7 @@ devspace dev
 **Build and push your image to the location specified by `IMG`:**
 
 ```sh
-make docker-build docker-push IMG=<some-registry>/vcluster-rancher-op:tag
+make docker-build docker-push IMG=<some-registry>/vcluster-rancher-operator:tag
 ```
 
 **Deploy the Manager to the cluster using Helm**

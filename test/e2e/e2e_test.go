@@ -27,20 +27,20 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/loft-sh/vcluster-rancher-op/test/utils"
+	"github.com/loft-sh/vcluster-rancher-operator/test/utils"
 )
 
 // namespace where the project is deployed in
-const namespace = "vcluster-rancher-op-system"
+const namespace = "vcluster-rancher-operator-system"
 
 // serviceAccountName created for the project
-const serviceAccountName = "vcluster-rancher-op-controller-manager"
+const serviceAccountName = "vcluster-rancher-operator-controller-manager"
 
 // metricsServiceName is the name of the metrics service of the project
-const metricsServiceName = "vcluster-rancher-op-controller-manager-metrics-service"
+const metricsServiceName = "vcluster-rancher-operator-controller-manager-metrics-service"
 
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
-const metricsRoleBindingName = "vcluster-rancher-op-metrics-binding"
+const metricsRoleBindingName = "vcluster-rancher-operator-metrics-binding"
 
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
@@ -173,7 +173,7 @@ var _ = Describe("Manager", Ordered, func() {
 		It("should ensure the metrics endpoint is serving metrics", func() {
 			By("creating a ClusterRoleBinding for the service account to allow access to metrics")
 			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
-				"--clusterrole=vcluster-rancher-op-metrics-reader",
+				"--clusterrole=vcluster-rancher-operator-metrics-reader",
 				fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
 			)
 			_, err := utils.Run(cmd)

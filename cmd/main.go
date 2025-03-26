@@ -27,9 +27,9 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
-	"github.com/loft-sh/vcluster-rancher-op/internal/controller/clusters"
-	"github.com/loft-sh/vcluster-rancher-op/pkg/token"
-	"github.com/loft-sh/vcluster-rancher-op/pkg/unstructured"
+	"github.com/loft-sh/vcluster-rancher-operator/internal/controller/clusters"
+	"github.com/loft-sh/vcluster-rancher-operator/pkg/token"
+	"github.com/loft-sh/vcluster-rancher-operator/pkg/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"

@@ -1,5 +1,5 @@
 version: v2beta1
-name: vcluster-rancher-op
+name: vcluster-rancher-operator
 
 # This is a list of `pipelines` that DevSpace can execute (you can define your own)
 pipelines:

@@ -5,8 +5,8 @@
 domain: loft.sh
 layout:
 - go.kubebuilder.io/v4
-projectName: vcluster-rancher-op
-repo: github.com/loft-sh/vcluster-rancher-op
+projectName: vcluster-rancher-operator
+repo: github.com/loft-sh/vcluster-rancher-operator
 resources:
 - controller: true
   domain: loft.sh

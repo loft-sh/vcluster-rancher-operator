@@ -5,7 +5,7 @@ on:
     types: [created]
 
 jobs:
-  publish-vcluster-rancher-op-image:
+  publish-vcluster-rancher-operator-image:
     if: startsWith(github.ref, 'refs/tags/v') == true
     runs-on: ubuntu-22.04
     permissions:
@@ -26,8 +26,8 @@ jobs:
         uses: docker/metadata-action@v4
         with:
           images: |
-            loftsh/vcluster-rancher-op
-            ghcr.io/loft-sh/vcluster-rancher-op
+            loftsh/vcluster-rancher-operator
+            ghcr.io/loft-sh/vcluster-rancher-operator
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=latest
@@ -59,13 +59,13 @@ jobs:
         run: echo ${{ steps.docker_build.outputs.digest }}
       - name: Sign Container DockerHub Image
         run: |
-          COSIGN_EXPERIMENTAL=1 cosign sign --yes loftsh/vcluster-rancher-op@${{ steps.docker_build.outputs.digest }}
+          COSIGN_EXPERIMENTAL=1 cosign sign --yes loftsh/vcluster-rancher-operator@${{ steps.docker_build.outputs.digest }}
       - name: Sign Container ghcr.io Image
         run: |
-          COSIGN_EXPERIMENTAL=1 cosign sign --yes ghcr.io/loft-sh/vcluster-rancher-op@${{ steps.docker_build.outputs.digest }}
+          COSIGN_EXPERIMENTAL=1 cosign sign --yes ghcr.io/loft-sh/vcluster-rancher-operator@${{ steps.docker_build.outputs.digest }}
   publish-chart:
     if: startsWith(github.ref, 'refs/tags/v') == true
-    needs: [publish-vcluster-rancher-op-image]
+    needs: [publish-vcluster-rancher-operator-image]
     runs-on: ubuntu-22.04
     steps:
       - name: Check out code

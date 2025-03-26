@@ -1,4 +1,4 @@
-module github.com/loft-sh/vcluster-rancher-op
+module github.com/loft-sh/vcluster-rancher-operator
 
 go 1.23.0
 

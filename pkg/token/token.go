@@ -5,8 +5,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/loft-sh/vcluster-rancher-op/pkg/rancher"
-	"github.com/loft-sh/vcluster-rancher-op/pkg/unstructured"
+	"github.com/loft-sh/vcluster-rancher-operator/pkg/rancher"
+	"github.com/loft-sh/vcluster-rancher-operator/pkg/unstructured"
 	"github.com/rancher/wrangler/pkg/randomtoken"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
@@ -46,7 +46,7 @@ func GetToken(ctx context.Context, client unstructured.Client) (string, error) {
 	_, err = client.Create(
 		ctx,
 		schema.GroupVersionKind{Kind: "Token", Group: "management.cattle.io", Version: "v3"},
-		"token-vcluster-rancher-op",
+		"token-vcluster-rancher-operator",
 		"",
 		false,
 		map[string]string{"loft.sh/vcluster-rancher-system-token": "true"},
@@ -59,7 +59,7 @@ func GetToken(ctx context.Context, client unstructured.Client) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("token-vcluster-rancher-op:%s", tokenValue), nil
+	return fmt.Sprintf("token-vcluster-rancher-operator:%s", tokenValue), nil
 }
 
 func RestConfigFromToken(clusterID, token string) (*rest.Config, error) {

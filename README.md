@@ -22,11 +22,12 @@ To install vCluster Rancher Operator, you can add the loft repository to Rancher
 1. Select the local cluster in the Rancher clusters overview page.
 2. In the sidebar, navigate to "Apps" -> "Repositories".
 3. Select "Create".
-4. Set the name to any value and the Index URL to `https://loft.sh/charts`.
-5. In the sidebar, navigate to "Apps" -> "Charts".
-6. Find and select the "vCluster Rancher Operator" chart.
-7. Follow the installation process and install the chart.
-8. In the sidebar, navigate to "Workloads" -> "Deployments". Confirm that the deployment named "vcluster-rancher-operator" has the State "Active".
+4. Set the name to any value and the Index URL to `https://charts.loft.sh`.
+5. (Optional) if you want to install pre-release versions you must select the user icon in the top right, then navigate to "Preferences". Scroll down and select "Include Prerelease Versions".
+6. In the sidebar, navigate to "Apps" -> "Charts".
+7. Find and select the "vCluster Rancher Operator" chart.
+8. Follow the installation process and install the chart.
+9. In the sidebar, navigate to "Workloads" -> "Deployments". Confirm that the deployment named "vcluster-rancher-operator" has the State "Active".
 
 Once the operator is installed, all vClusters deployed in any downstream cluster in rancher will cause a corresponding Rancher cluster to be created, the vCluster to connect to the corresponding Rancher cluster, and cluster owners added.
 

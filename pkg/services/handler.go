@@ -157,6 +157,16 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 				return false, fmt.Errorf("failed to get cluster registration token for vCluster: %w", err)
 			}
 			logger.Info("successfully retrieved cluster registration token for vCluster")
+
+			_, err = h.ClusterClient.CoreV1().Secrets(service.Namespace).Get(h.Ctx, "vc-"+service.Name, v1.GetOptions{})
+			if err != nil {
+				if errors.IsNotFound(err) {
+					return false, nil
+				}
+				return false, fmt.Errorf("failed to get vcluster secret: %w", err)
+			}
+			logger.Info("successfully confirmed vCluster secret was created")
+
 			return true, nil
 		})
 	if err != nil {

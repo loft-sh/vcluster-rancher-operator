@@ -13,7 +13,6 @@ Deploying a vCluster in rancher should provide the same great experience that pr
 
 **Contents**
 - [Installation](#installation)
-- [How to Use](#how-to-use)
 - [Technical Details](#technical-details)
 - [Development](#development)
 

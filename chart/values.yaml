@@ -5,6 +5,9 @@ global:
   cattle:
     systemDefaultRegistry: ""
 
+rbac:
+  useStaticUser: true
+
 image:
   registry: "ghcr.io"
   repository: "loft-sh/vcluster-rancher-operator"

@@ -1,4 +1,7 @@
-{{- $userName := randAlphaNum 5 | lower -}}
+{{ $userName := (printf "vro-%s" (randAlphaNum 5 | lower)) }} # we create the name here if necessary so it can also be passed to the GlobalRoleBinding
+{{ if .Values.rbac.useStaticUser }}
+{{ $userName = "vcluster-rancher-operator" }}
+{{ end }}
 apiVersion: management.cattle.io/v3
 description: ""
 kind: User

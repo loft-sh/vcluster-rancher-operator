@@ -34,6 +34,7 @@ import (
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/services"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/token"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/unstructured"
+	"github.com/loft-sh/vcluster-rancher-operator/pkg/unstructured/gvk"
 	errors2 "github.com/onsi/gomega/gstruct/errors"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -41,7 +42,6 @@ import (
 	v1unstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/json"
@@ -88,7 +88,7 @@ type ClusterReconciler struct {
 func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	managementCluster, err := r.Client.Get(ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "Cluster"}, req.Name, "")
+	managementCluster, err := r.Client.Get(ctx, gvk.ClustersManagementCattle, req.Name, "")
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -208,7 +208,7 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 		return errors3.New("vCluster management cluster missing at least 1 vCluster label(s)")
 	}
 
-	project, err := r.Client.Get(ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "Project"}, projectName, hostClusterName)
+	project, err := r.Client.Get(ctx, gvk.ProjectManagementCattle, projectName, hostClusterName)
 	if err != nil {
 		return fmt.Errorf("failed to get vCluster's project [%s/%s]: %w", managementCluster.GetName(), projectName, err)
 	}
@@ -217,7 +217,7 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 		return fmt.Errorf("vCluster was installed in project [%[1]s] with UID [%[2]s]. Current project [%[1]s] has mismatched UID [%[3]s]", projectName, projectUID, project.GetUID())
 	}
 
-	projectRoleTemplateBindings, err := r.Client.List(ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ProjectRoleTemplateBinding"}, project.GetName())
+	projectRoleTemplateBindings, err := r.Client.List(ctx, gvk.ProjectRoleTemplateBindingManagementCattle, project.GetName())
 	if err != nil {
 		return fmt.Errorf("failed to list projectRoleTemplateBindings that target vCluster's project [%s]: %w", project.GetName(), err)
 	}
@@ -229,7 +229,7 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 	if err != nil {
 		return fmt.Errorf("failed to create requirement that filters for ClusterRoleTemplateBindings without loft.sh/vcluster-service-uid label: %w", err)
 	}
-	clusterRoleTemplateBindings, err := r.Client.ListWithOptions(ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ClusterRoleTemplateBinding"}, &client.ListOptions{Namespace: hostClusterName, LabelSelector: labels.NewSelector().Add(*requirement)})
+	clusterRoleTemplateBindings, err := r.Client.ListWithOptions(ctx, gvk.ClusterRoleTemplateBindingManagementCattle, &client.ListOptions{Namespace: hostClusterName, LabelSelector: labels.NewSelector().Add(*requirement)})
 	if err != nil {
 		return fmt.Errorf("failed to list clusterRoleTemplateBindings that target vCluster's host cluster [%s]: %w", hostClusterName, err)
 	}
@@ -249,7 +249,7 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 
 			clusterOwners[user] = struct{}{}
 
-			_, err := r.Client.Get(ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ClusterRoleTemplateBinding"}, fmt.Sprintf("vcluster-%s-co", user), managementCluster.GetName())
+			_, err := r.Client.Get(ctx, gvk.ClusterRoleTemplateBindingManagementCattle, fmt.Sprintf("vcluster-%s-co", user), managementCluster.GetName())
 			if err != nil && !errors.IsNotFound(err) {
 				return err
 			}
@@ -265,7 +265,7 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 
 			_, err = r.Client.Create(
 				ctx,
-				schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ClusterRoleTemplateBinding"},
+				gvk.ClusterRoleTemplateBindingManagementCattle,
 				fmt.Sprintf("vcluster-%s-co", user),
 				managementCluster.GetName(), false,
 				map[string]string{
@@ -292,7 +292,7 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 		return fmt.Errorf("failed to create requirement that filters for ClusterRoleTemplateBindings with loft.sh/vcluster-service-uid label: %w", err)
 	}
 
-	crtbs, err := r.Client.ListWithOptions(ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ClusterRoleTemplateBinding"}, &client.ListOptions{Namespace: managementCluster.GetName(), LabelSelector: labels.NewSelector().Add(*requirement)})
+	crtbs, err := r.Client.ListWithOptions(ctx, gvk.ClusterRoleTemplateBindingManagementCattle, &client.ListOptions{Namespace: managementCluster.GetName(), LabelSelector: labels.NewSelector().Add(*requirement)})
 	if err != nil {
 		return fmt.Errorf("failed to list ClusterRoleTemplateBindings that target vCluster's rancher cluster [%s]: %w", managementCluster.GetName(), err)
 	}
@@ -403,12 +403,12 @@ func (r *ClusterReconciler) clustersRelatedToTargetProject(ctx context.Context, 
 		return nil
 	}
 
-	project, err := r.Client.Get(ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "Project"}, projectID, clusterID)
+	project, err := r.Client.Get(ctx, gvk.ProjectManagementCattle, projectID, clusterID)
 	if err != nil {
 		return nil
 	}
 
-	clusters, err := r.Client.ListWithLabel(ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "Cluster"}, "loft.sh/vcluster-project-uid", string(project.GetUID()))
+	clusters, err := r.Client.ListWithLabel(ctx, gvk.ClustersManagementCattle, "loft.sh/vcluster-project-uid", string(project.GetUID()))
 	if err != nil {
 		return nil
 	}
@@ -425,7 +425,7 @@ func (r *ClusterReconciler) clustersHostedByClusterTarget(ctx context.Context, o
 	crtb := obj.(*v1unstructured.Unstructured)
 	clusterName := unstructured.GetNested[string](crtb.Object, "clusterName")
 
-	clusters, err := r.Client.ListWithLabel(ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "Cluster"}, "loft.sh/vcluster-host-cluster", clusterName)
+	clusters, err := r.Client.ListWithLabel(ctx, gvk.ClustersManagementCattle, "loft.sh/vcluster-host-cluster", clusterName)
 	if err != nil {
 		return nil
 	}

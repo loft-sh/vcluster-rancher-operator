@@ -10,12 +10,12 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/unstructured"
+	"github.com/loft-sh/vcluster-rancher-operator/pkg/unstructured/gvk"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	v1unstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -86,12 +86,12 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 		return nil
 	}
 
-	project, err := h.LocalUnstructuredClient.Get(h.Ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "Project"}, ns.GetLabels()["field.cattle.io/projectId"], h.ClusterName)
+	project, err := h.LocalUnstructuredClient.Get(h.Ctx, gvk.ProjectManagementCattle, ns.GetLabels()["field.cattle.io/projectId"], h.ClusterName)
 	if err != nil {
 		return fmt.Errorf("failed to get project for vCluster's namespace [%s]: %w", service.Namespace, err)
 	}
 
-	provisioningCluster, err := h.LocalUnstructuredClient.GetFirstWithLabel(h.Ctx, schema.GroupVersionKind{Group: "provisioning.cattle.io", Version: "v1", Kind: "Cluster"}, "loft.sh/vcluster-service-uid", string(service.GetUID()))
+	provisioningCluster, err := h.LocalUnstructuredClient.GetFirstWithLabel(h.Ctx, gvk.ClusterProvisioningCattle, "loft.sh/vcluster-service-uid", string(service.GetUID()))
 	if err != nil && !errors.IsNotFound(err) {
 		return fmt.Errorf("error getting provisioning cluster for vCluster instance: %w", err)
 	}
@@ -100,7 +100,7 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 		logger.Info("provisioning cluster does not exist for vCluster instance, creating...")
 		provisioningCluster, err = h.LocalUnstructuredClient.Create(
 			h.Ctx,
-			schema.GroupVersionKind{Group: "provisioning.cattle.io", Version: "v1", Kind: "Cluster"},
+			gvk.ClusterProvisioningCattle,
 			fmt.Sprintf("%s-%s-%s", h.ClusterName, service.Namespace, service.Name),
 			"fleet-default", false,
 			map[string]string{
@@ -126,7 +126,7 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 		// the use of a backoff retry here is justifiable because we are not using a normal framework that will retry on error on our behalf.
 		func() (bool, error) {
 			logger.Info("waiting for rancher to create management cluster for vCluster")
-			managementCluster, err = h.LocalUnstructuredClient.GetFirstWithLabel(h.Ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "Cluster"}, "loft.sh/vcluster-service-uid", string(service.GetUID()))
+			managementCluster, err = h.LocalUnstructuredClient.GetFirstWithLabel(h.Ctx, gvk.ClustersManagementCattle, "loft.sh/vcluster-service-uid", string(service.GetUID()))
 			if err != nil {
 				if errors.IsNotFound(err) {
 					return false, nil
@@ -149,7 +149,7 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 			}
 
 			logger.Info("waiting for rancher to create cluster registration token for vCluster")
-			clusterRegistrationToken, err = h.LocalUnstructuredClient.Get(h.Ctx, schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ClusterRegistrationToken"}, "default-token", managementCluster.GetName())
+			clusterRegistrationToken, err = h.LocalUnstructuredClient.Get(h.Ctx, gvk.ClusterRegistrationTokenManagementCattle, "default-token", managementCluster.GetName())
 			if err != nil {
 				if errors.IsNotFound(err) {
 					return false, nil
@@ -248,7 +248,7 @@ func (h *Handler) deletevClusterRancherCluster(obj interface{}) error {
 
 	logger.Info("deleting vCluster's rancher cluster")
 
-	provisioningCluster, err := h.LocalUnstructuredClient.GetFirstWithLabel(h.Ctx, schema.GroupVersionKind{Group: "provisioning.cattle.io", Version: "v1", Kind: "Cluster"}, "loft.sh/vcluster-service-uid", string(service.GetUID()))
+	provisioningCluster, err := h.LocalUnstructuredClient.GetFirstWithLabel(h.Ctx, gvk.ClusterProvisioningCattle, "loft.sh/vcluster-service-uid", string(service.GetUID()))
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return nil

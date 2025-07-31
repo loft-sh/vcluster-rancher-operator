@@ -60,7 +60,11 @@ Deletion events for the vCluster service will trigger the controller to delete t
 - rancher installed
 - access to local cluster in rancher
 
-### To Deploy on the cluster
+### To Deploy on the Rancher local cluster
+
+1. Download kubeconfig for rancher's local cluster from rancher, if you do not have direct access. This will be the case for docker installs of rancher.
+2. Point the `KUBECONFIG` environment variable to the rancher local cluster's kubeconfig path.
+3. Deploy the vcluster rancher operator using one of the following methods:
 
 **Deploy the manager using devspace**
 

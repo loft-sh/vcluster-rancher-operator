@@ -7,8 +7,8 @@ import (
 
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/rancher"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/unstructured"
+	"github.com/loft-sh/vcluster-rancher-operator/pkg/unstructured/gvk"
 	"github.com/rancher/wrangler/pkg/randomtoken"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -21,7 +21,7 @@ type data struct {
 }
 
 func GetToken(ctx context.Context, client unstructured.Client) (string, error) {
-	tokenList, err := client.ListWithLabel(ctx, schema.GroupVersionKind{Kind: "token", Group: "management.cattle.io", Version: "v3"}, "loft.sh/vcluster-rancher-system-token", "true")
+	tokenList, err := client.ListWithLabel(ctx, gvk.TokenManagementCattle, "loft.sh/vcluster-rancher-system-token", "true")
 	if err != nil {
 		return "", err
 	}
@@ -33,7 +33,7 @@ func GetToken(ctx context.Context, client unstructured.Client) (string, error) {
 		}
 	}
 
-	systemUser, err := client.GetFirstWithLabel(ctx, schema.GroupVersionKind{Kind: "User", Group: "management.cattle.io", Version: "v3"}, "loft.sh/vcluster-rancher-user", "true")
+	systemUser, err := client.GetFirstWithLabel(ctx, gvk.UserManagementCattle, "loft.sh/vcluster-rancher-user", "true")
 	if err != nil {
 		return "", err
 	}
@@ -45,7 +45,7 @@ func GetToken(ctx context.Context, client unstructured.Client) (string, error) {
 
 	_, err = client.Create(
 		ctx,
-		schema.GroupVersionKind{Kind: "Token", Group: "management.cattle.io", Version: "v3"},
+		gvk.TokenManagementCattle,
 		"token-vcluster-rancher-operator",
 		"",
 		false,

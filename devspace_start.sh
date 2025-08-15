@@ -27,10 +27,17 @@ This is how you can work with it:
 
 # Set terminal prompt
 export PS1="\[${COLOR_BLUE}\]devspace\[${COLOR_RESET}\] ./\W \[${COLOR_BLUE}\]\\$\[${COLOR_RESET}\] "
+COMMAND_RUN='go run -mod vendor cmd/main.go'
+COMMAND_DEBUG='dlv debug ./cmd/main.go --listen=0.0.0.0:2345 --api-version=2 --output /tmp/__debug_bin --headless --build-flags=-mod=vendor'
 if [ -z "$BASH" ]; then export PS1="$ "; fi
 
 # Include project's bin/ folder in PATH
 export PATH="./bin:$PATH"
+
+export HISTFILE=/tmp/.bash_history
+history -s "$COMMAND_DEBUG"
+history -s "$COMMAND_RUN"
+history -a
 
 # Open shell
 bash --norc

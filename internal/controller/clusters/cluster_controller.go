@@ -20,7 +20,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	errors3 "errors"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,14 +30,15 @@ import (
 	"sync"
 
 	"github.com/go-logr/logr"
+	"github.com/loft-sh/vcluster-rancher-operator/pkg/constants"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/rancher"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/services"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/token"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/unstructured"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/unstructured/gvk"
-	errors2 "github.com/onsi/gomega/gstruct/errors"
-	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	gerrors "github.com/onsi/gomega/gstruct/errors"
+	corev1 "k8s.io/api/core/v1"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	v1unstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -90,7 +91,7 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	managementCluster, err := r.Client.Get(ctx, gvk.ClustersManagementCattle, req.Name, "")
 	if err != nil {
-		if errors.IsNotFound(err) {
+		if kerrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -124,11 +125,6 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{}, nil
 }
 
-type TestCluster struct {
-	metav1.ObjectMeta
-	metav1.TypeMeta
-}
-
 func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logger logr.Logger, clusterClient *kubernetes.Clientset, unstructuredClusterClient unstructured.Client, clusterName string) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
@@ -147,7 +143,7 @@ func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logg
 			options.LabelSelector = "app=vcluster"
 			return clusterClient.CoreV1().Services("").Watch(ctx, options)
 		},
-	}, &v1.Service{}, 0)
+	}, &corev1.Service{}, 0)
 
 	_, err := sharedInformer.AddEventHandler(&services.Handler{
 		Ctx:                       ctx,
@@ -195,9 +191,9 @@ func getClusterClient(restConfig *rest.Config) (*kubernetes.Clientset, unstructu
 // the cluster owner CRTB is the CRTB's "parent-prtb" or "parent-crtb" respectively. Once the CRTBs parent is deleted, the CRTB will be deleted, removing the user as a
 // cluster owner from the vCluster's Rancher cluster.
 func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Logger, managementCluster v1unstructured.Unstructured) error {
-	projectUID := managementCluster.GetLabels()["loft.sh/vcluster-project-uid"]
-	projectName := managementCluster.GetLabels()["loft.sh/vcluster-project"]
-	hostClusterName := managementCluster.GetLabels()["loft.sh/vcluster-host-cluster"]
+	projectUID := managementCluster.GetLabels()[constants.LabelProjectUID]
+	projectName := managementCluster.GetLabels()[constants.LabelProjectName]
+	hostClusterName := managementCluster.GetLabels()[constants.LabelHostClusterName]
 
 	if projectUID == "" && projectName == "" && hostClusterName == "" {
 		// not a vcluster management cluster
@@ -205,7 +201,10 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 	}
 
 	if projectName == "" || projectUID == "" || hostClusterName == "" {
-		return errors3.New("vCluster management cluster missing at least 1 vCluster label(s)")
+		if projectUID == constants.NoRancherProjectOnNameSpace {
+			return nil
+		}
+		return errors.New("vCluster management cluster missing at least 1 vCluster label(s)")
 	}
 
 	project, err := r.Client.Get(ctx, gvk.ProjectManagementCattle, projectName, hostClusterName)
@@ -225,7 +224,7 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 	projectRoleTemplateBindings = unstructured.FilterItems[string](projectRoleTemplateBindings, fmt.Sprintf("%s:%s", project.GetNamespace(), project.GetName()), true, "projectName")
 	projectRoleTemplateBindings.Items = append(unstructured.FilterItems[string](projectRoleTemplateBindings, "project-owner", true, "roleTemplateName").Items, unstructured.FilterItems[string](projectRoleTemplateBindings, "project-member", true, "roleTemplateName").Items...)
 
-	requirement, err := labels.NewRequirement("loft.sh/vcluster-service-uid", selection.DoesNotExist, nil)
+	requirement, err := labels.NewRequirement(constants.LabelVClusterServiceUID, selection.DoesNotExist, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create requirement that filters for ClusterRoleTemplateBindings without loft.sh/vcluster-service-uid label: %w", err)
 	}
@@ -250,7 +249,7 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 			clusterOwners[user] = struct{}{}
 
 			_, err := r.Client.Get(ctx, gvk.ClusterRoleTemplateBindingManagementCattle, fmt.Sprintf("vcluster-%s-co", user), managementCluster.GetName())
-			if err != nil && !errors.IsNotFound(err) {
+			if err != nil && !kerrors.IsNotFound(err) {
 				return err
 			}
 
@@ -258,9 +257,9 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 				return nil
 			}
 
-			parentLabel := "loft.sh/parent-prtb"
+			parentLabel := constants.LabelParentRoleTemplateBinding
 			if item.GetKind() == "ClusterRoleTemplateBinding" {
-				parentLabel = "loft.sh/parent-crtb"
+				parentLabel = constants.LabelChildRoleTemplateBinding
 			}
 
 			_, err = r.Client.Create(
@@ -269,8 +268,8 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 				fmt.Sprintf("vcluster-%s-co", user),
 				managementCluster.GetName(), false,
 				map[string]string{
-					"loft.sh/vcluster-service-uid": managementCluster.GetLabels()["loft.sh/vcluster-service-uid"],
-					parentLabel:                    item.GetName(),
+					constants.LabelVClusterServiceUID: managementCluster.GetLabels()[constants.LabelVClusterServiceUID],
+					parentLabel:                       item.GetName(),
 				},
 				nil,
 				map[string]interface{}{
@@ -283,11 +282,11 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 			return nil
 		})
 	if len(forEachErrors) > 0 {
-		return fmt.Errorf("failed to to create %d cluster role template bindings for vCluster's rancher cluster: %w", len(forEachErrors), errors2.AggregateError(forEachErrors))
+		return fmt.Errorf("failed to to create %d cluster role template bindings for vCluster's rancher cluster: %w", len(forEachErrors), gerrors.AggregateError(forEachErrors))
 	}
 
 	// cleanup ClusterRoleTemplateBindings
-	requirement, err = labels.NewRequirement("loft.sh/vcluster-service-uid", selection.Equals, []string{managementCluster.GetLabels()["loft.sh/vcluster-service-uid"]})
+	requirement, err = labels.NewRequirement(constants.LabelVClusterServiceUID, selection.Equals, []string{managementCluster.GetLabels()[constants.LabelVClusterServiceUID]})
 	if err != nil {
 		return fmt.Errorf("failed to create requirement that filters for ClusterRoleTemplateBindings with loft.sh/vcluster-service-uid label: %w", err)
 	}
@@ -312,13 +311,13 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 			return nil
 		}
 		err = r.Client.Delete(ctx, &item)
-		if err != nil && !errors.IsNotFound(err) {
+		if err != nil && !kerrors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete crtb mapped to deleted PRTB [%s/%s]: %w", item.GetNamespace(), item.GetName(), err)
 		}
 		return nil
 	})
 	if forEachErrors != nil {
-		return errors2.AggregateError(forEachErrors)
+		return gerrors.AggregateError(forEachErrors)
 	}
 	return nil
 }
@@ -328,17 +327,17 @@ func (r *ClusterReconciler) SyncCleanup(ctx context.Context, logger logr.Logger,
 		return nil
 	}
 
-	if managementCluster.GetLabels()["loft.sh/target-app"] == "" {
+	if managementCluster.GetLabels()[constants.LabelTargetApp] == "" {
 		return nil
 	}
 
-	logger = logger.WithValues("vclusterAppName", managementCluster.GetLabels()["loft.sh/target-app"])
-	appNamespace, appName, err := parseHalves(managementCluster.GetLabels()["loft.sh/target-app"], "_")
+	logger = logger.WithValues("vclusterAppName", managementCluster.GetLabels()[constants.LabelTargetApp])
+	appNamespace, appName, err := parseHalves(managementCluster.GetLabels()[constants.LabelTargetApp], "_")
 	if err != nil {
-		return fmt.Errorf("failed to parse app namespace and name from management clusters \"loft.sh/target-app\" annotation")
+		return fmt.Errorf("failed to parse app namespace and name from management clusters %q annotation", constants.LabelTargetApp)
 	}
 
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/v1/catalog.cattle.io.apps/%s/%s?", rancher.GetClusterEndpoint(managementCluster.GetLabels()["loft.sh/vcluster-host-cluster"]), appNamespace, appName)+url.PathEscape("action=uninstall"), bytes.NewBuffer([]byte("{}")))
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/v1/catalog.cattle.io.apps/%s/%s?", rancher.GetClusterEndpoint(managementCluster.GetLabels()[constants.LabelHostClusterName]), appNamespace, appName)+url.PathEscape("action=uninstall"), bytes.NewBuffer([]byte("{}")))
 	if err != nil {
 		return fmt.Errorf("could not create request for vcluster app uninstal: %w", err)
 	}
@@ -363,20 +362,20 @@ func (r *ClusterReconciler) SyncCleanup(ctx context.Context, logger logr.Logger,
 	}
 
 	if resp.StatusCode != http.StatusOK && obj.Code != "NotFound" {
-		return errors3.New("app uninstall failed for app")
+		return errors.New("app uninstall failed for app")
 	}
 
 	logger.Info("cleaning up...")
-	if !slices.Contains(managementCluster.GetFinalizers(), "loft.sh/vcluster-app-cleanup") {
+	if !slices.Contains(managementCluster.GetFinalizers(), constants.FinalizerVClusterApp) {
 		logger.Info("nothing to cleanup, exiting")
 		return nil
 	}
 
 	for index, value := range managementCluster.GetFinalizers() {
-		if value == "loft.sh/vcluster-app-cleanup" {
+		if value == constants.FinalizerVClusterApp {
 			managementCluster.SetFinalizers(slices.Delete(managementCluster.GetFinalizers(), index, index+1))
 			err = r.Client.Update(ctx, &managementCluster)
-			if err != nil && !errors.IsNotFound(err) {
+			if err != nil && !kerrors.IsNotFound(err) {
 				return fmt.Errorf("failed to remov")
 			}
 			break
@@ -408,7 +407,7 @@ func (r *ClusterReconciler) clustersRelatedToTargetProject(ctx context.Context, 
 		return nil
 	}
 
-	clusters, err := r.Client.ListWithLabel(ctx, gvk.ClustersManagementCattle, "loft.sh/vcluster-project-uid", string(project.GetUID()))
+	clusters, err := r.Client.ListWithLabel(ctx, gvk.ClustersManagementCattle, constants.LabelProjectUID, string(project.GetUID()))
 	if err != nil {
 		return nil
 	}
@@ -425,7 +424,7 @@ func (r *ClusterReconciler) clustersHostedByClusterTarget(ctx context.Context, o
 	crtb := obj.(*v1unstructured.Unstructured)
 	clusterName := unstructured.GetNested[string](crtb.Object, "clusterName")
 
-	clusters, err := r.Client.ListWithLabel(ctx, gvk.ClustersManagementCattle, "loft.sh/vcluster-host-cluster", clusterName)
+	clusters, err := r.Client.ListWithLabel(ctx, gvk.ClustersManagementCattle, constants.LabelHostClusterName, clusterName)
 	if err != nil {
 		return nil
 	}
@@ -441,7 +440,7 @@ func (r *ClusterReconciler) clustersHostedByClusterTarget(ctx context.Context, o
 func parseHalves(name, separator string) (string, string, error) {
 	parts := strings.Split(name, separator)
 	if len(parts) != 2 {
-		return "", "", errors3.New("invalid project name [%s], expect to have the format <cluster-id:project-id>")
+		return "", "", errors.New("invalid project name [%s], expect to have the format <cluster-id:project-id>")
 	}
 	return parts[0], parts[1], nil
 }

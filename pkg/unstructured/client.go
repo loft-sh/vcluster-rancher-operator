@@ -49,7 +49,7 @@ func (c *Client) List(ctx context.Context, gvk schema.GroupVersionKind, namespac
 	if namespace != "" {
 		return c.ListWithOptions(ctx, gvk, &client.ListOptions{Namespace: namespace})
 	}
-	return c.ListWithOptions(ctx, gvk, nil)
+	return c.ListWithOptions(ctx, gvk, &client.ListOptions{})
 }
 
 func (c *Client) ListWithOptions(ctx context.Context, gvk schema.GroupVersionKind, options *client.ListOptions) (unstructured.UnstructuredList, error) {

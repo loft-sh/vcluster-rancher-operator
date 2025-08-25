@@ -88,7 +88,7 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 		return nil
 	}
 
-	provisioningCluster, err := h.LocalUnstructuredClient.GetFirstWithLabel(h.Ctx, gvk.ProjectManagementCattle, constants.LabelVClusterServiceUID, string(service.GetUID()))
+	provisioningCluster, err := h.LocalUnstructuredClient.GetFirstWithLabel(h.Ctx, gvk.ClusterProvisioningCattle, constants.LabelVClusterServiceUID, string(service.GetUID()))
 	if client.IgnoreNotFound(err) != nil {
 		return fmt.Errorf("error getting provisioning cluster for vCluster instance: %w", err)
 	}

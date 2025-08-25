@@ -204,7 +204,9 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 		if projectUID == constants.NoRancherProjectOnNameSpace {
 			return nil
 		}
-		return errors.New("vCluster management cluster missing at least 1 vCluster label(s)")
+		logger.Info(fmt.Sprintf("vCluster management cluster %q missing at least 1 vCluster label(s)", managementCluster.GetName()))
+
+		return nil
 	}
 
 	project, err := r.Client.Get(ctx, gvk.ProjectManagementCattle, projectName, hostClusterName)
@@ -387,10 +389,15 @@ func (r *ClusterReconciler) SyncCleanup(ctx context.Context, logger logr.Logger,
 // SetupWithManager sets up the controller with the Manager.
 func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		Watches(&v1unstructured.Unstructured{Object: map[string]interface{}{"kind": "ProjectRoleTemplateBinding", "apiVersion": "management.cattle.io/v3"}}, handler.EnqueueRequestsFromMapFunc(r.clustersRelatedToTargetProject), builder.WithPredicates(predicate.ResourceVersionChangedPredicate{})).
-		Watches(&v1unstructured.Unstructured{Object: map[string]interface{}{"kind": "ClusterRoleTemplateBinding", "apiVersion": "management.cattle.io/v3"}}, handler.EnqueueRequestsFromMapFunc(r.clustersHostedByClusterTarget), builder.WithPredicates(predicate.ResourceVersionChangedPredicate{})).
-		// Uncomment the following line adding a pointer to an instance of the controlled resource as an argument
-		For(&v1unstructured.Unstructured{Object: map[string]interface{}{"kind": "Cluster", "apiVersion": "management.cattle.io/v3"}}).
+		Watches(gvk.ToUnstructured(gvk.ProjectRoleTemplateBindingManagementCattle),
+			handler.EnqueueRequestsFromMapFunc(r.clustersRelatedToTargetProject),
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
+		Watches(gvk.ToUnstructured(gvk.ClusterRoleTemplateBindingManagementCattle),
+			handler.EnqueueRequestsFromMapFunc(r.clustersHostedByClusterTarget),
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
+		For(gvk.ToUnstructured(gvk.ClustersManagementCattle)).
 		Named("cluster").
 		Complete(r)
 }

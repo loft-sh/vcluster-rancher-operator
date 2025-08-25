@@ -26,6 +26,7 @@ To install vCluster Rancher Operator, you can add the loft repository to Rancher
 6. In the sidebar, navigate to "Apps" -> "Charts".
 7. Find and select the "vCluster Rancher Operator" chart.
 8. Follow the installation process and install the chart.
+   * 💡 For development with DevSpace, name the installation "app", to match the deployment in `devspace.yaml`.
 9. In the sidebar, navigate to "Workloads" -> "Deployments". Confirm that the deployment named "vcluster-rancher-operator" has the State "Active".
 
 Once the operator is installed, all vClusters deployed in any downstream cluster in rancher will cause a corresponding Rancher cluster to be created, the vCluster to connect to the corresponding Rancher cluster, and cluster owners added.

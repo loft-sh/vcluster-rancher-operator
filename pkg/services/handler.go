@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -95,18 +96,23 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 
 	if kerrors.IsNotFound(err) {
 		logger.Info("provisioning cluster does not exist for vCluster instance, creating...")
-		project, err := h.LocalUnstructuredClient.Get(h.Ctx, gvk.ClusterProvisioningCattle, ns.GetLabels()["field.cattle.io/projectId"], h.ClusterName)
+
 		labels := map[string]string{
 			constants.LabelVClusterServiceUID: string(service.GetUID()),
 			constants.LabelHostClusterName:    h.ClusterName,
 		}
 
-		if err != nil {
-			logger.Error(err, "get project for vCluster service")
-			labels[constants.LabelProjectUID] = constants.NoRancherProjectOnNameSpace
-		} else {
+		projectID, hasProjectID := ns.GetLabels()["field.cattle.io/projectId"]
+		if hasProjectID {
+			project, err := h.LocalUnstructuredClient.Get(h.Ctx, gvk.ProjectManagementCattle, projectID, h.ClusterName)
+			if err != nil {
+				return fmt.Errorf("failed to get project for vCluster's namespace [%s]: %w", service.Namespace, err)
+			}
+
 			labels[constants.LabelProjectUID] = string(project.GetUID())
 			labels[constants.LabelProjectName] = project.GetName()
+		} else {
+			labels[constants.LabelProjectUID] = constants.NoRancherProjectOnNameSpace
 		}
 
 		provisioningCluster, err = h.LocalUnstructuredClient.Create(
@@ -131,7 +137,7 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 	err = wait.ExponentialBackoff(wait.Backoff{Duration: 100 * time.Millisecond, Steps: 20, Factor: 1.5},
 		// the use of a backoff retry here is justifiable because we are not using a normal framework that will retry on error on our behalf.
 		func() (bool, error) {
-			logger.Info("waiting for rancher to create management cluster for vCluster")
+			logger.Info(fmt.Sprintf("waiting for rancher to create management cluster for vCluster %q: %q", service.Name, service.GetUID()))
 			managementCluster, err = h.LocalUnstructuredClient.GetFirstWithLabel(h.Ctx, gvk.ClustersManagementCattle, constants.LabelVClusterServiceUID, string(service.GetUID()))
 			if err != nil {
 				if kerrors.IsNotFound(err) {
@@ -141,17 +147,25 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 			}
 			logger.Info("successfully retrieved management cluster for vCluster")
 
+			orig := managementCluster.DeepCopy()
+			// If the annotation is set and the finalizer is not present, add it along with the target app label
+			// Otherwise, remove the finalizer
 			if service.GetAnnotations()[constants.AnnotationUninstallOnDelete] == "true" {
-				managementCluster.SetFinalizers([]string{constants.FinalizerVClusterApp})
+				managementCluster.SetFinalizers(append(managementCluster.GetFinalizers(), constants.FinalizerVClusterApp))
+
 				// for some reason setting annotations on the management cluster before its admission webhook deploys stops the agent from installing, so a label is used here
-				managementCluster.SetLabels(map[string]string{constants.LabelTargetApp: fmt.Sprintf("%s_%s", service.Annotations["meta.helm.sh/release-namespace"], service.Annotations["meta.helm.sh/release-name"])})
-				err = h.LocalUnstructuredClient.Update(h.Ctx, &managementCluster)
-				if err != nil {
-					if kerrors.IsConflict(err) {
-						return false, nil
-					}
-					return false, fmt.Errorf("failed to add ap cleanup finalizer %q to management cluster: %w", constants.AnnotationUninstallOnDelete, err)
+				labels := managementCluster.GetLabels()
+				labels[constants.LabelTargetApp] = fmt.Sprintf("%s_%s", service.Annotations["meta.helm.sh/release-namespace"], service.Annotations["meta.helm.sh/release-name"])
+				managementCluster.SetLabels(labels)
+			} else if idx := slices.Index(managementCluster.GetFinalizers(), constants.FinalizerVClusterApp); idx >= 0 {
+				managementCluster.SetFinalizers(slices.Delete(managementCluster.GetFinalizers(), idx, idx+1))
+			}
+
+			if err := h.LocalUnstructuredClient.Patch(h.Ctx, &managementCluster, client.MergeFrom(orig)); err != nil {
+				if kerrors.IsConflict(err) {
+					return false, nil
 				}
+				return false, fmt.Errorf("failed to add app cleanup finalizer %q to management cluster: %w", constants.AnnotationUninstallOnDelete, err)
 			}
 
 			logger.Info("waiting for rancher to create cluster registration token for vCluster")

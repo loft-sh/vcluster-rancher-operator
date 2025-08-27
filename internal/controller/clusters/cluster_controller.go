@@ -97,41 +97,29 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	restConfig, err := token.RestConfigFromToken(managementCluster.GetName(), r.RancherToken)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
+	cleanupErr := r.SyncCleanup(ctx, logger, managementCluster)
+	rbacErr := r.SyncRancherRBAC(ctx, logger, managementCluster)
+	installErr := r.SyncvClusterInstallHandler(ctx, logger, managementCluster.GetName())
 
-	clusterClient, unstructClusterClient, err := getClusterClient(restConfig)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	err = r.SyncCleanup(ctx, logger, managementCluster)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	err = r.SyncRancherRBAC(ctx, logger, managementCluster)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	err = r.SyncvClusterInstallHandler(ctx, logger, clusterClient, unstructClusterClient, managementCluster.GetName())
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, errors.Join(cleanupErr, rbacErr, installErr)
 }
 
-func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logger logr.Logger, clusterClient *kubernetes.Clientset, unstructuredClusterClient unstructured.Client, clusterName string) error {
+func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logger logr.Logger, clusterName string) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
-	_, ok := r.peers[clusterName]
 
-	if ok {
+	if _, ok := r.peers[clusterName]; ok {
 		return nil
+	}
+
+	restConfig, err := token.RestConfigFromToken(clusterName, r.RancherToken)
+	if err != nil {
+		return err
+	}
+
+	clusterClient, unstructuredClusterClient, err := getClusterClient(restConfig)
+	if err != nil {
+		return err
 	}
 
 	sharedInformer := cache.NewSharedInformer(&cache.ListWatch{
@@ -145,7 +133,7 @@ func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logg
 		},
 	}, &corev1.Service{}, 0)
 
-	_, err := sharedInformer.AddEventHandler(&services.Handler{
+	_, err = sharedInformer.AddEventHandler(&services.Handler{
 		Ctx:                       ctx,
 		Logger:                    logger,
 		LocalUnstructuredClient:   r.Client,
@@ -364,7 +352,7 @@ func (r *ClusterReconciler) SyncCleanup(ctx context.Context, logger logr.Logger,
 	}
 
 	if resp.StatusCode != http.StatusOK && obj.Code != "NotFound" {
-		return errors.New("app uninstall failed for app")
+		return errors.New("app uninstall failed")
 	}
 
 	logger.Info("cleaning up...")
@@ -375,8 +363,9 @@ func (r *ClusterReconciler) SyncCleanup(ctx context.Context, logger logr.Logger,
 
 	for index, value := range managementCluster.GetFinalizers() {
 		if value == constants.FinalizerVClusterApp {
+			orig := managementCluster.DeepCopy()
 			managementCluster.SetFinalizers(slices.Delete(managementCluster.GetFinalizers(), index, index+1))
-			err = r.Client.Update(ctx, &managementCluster)
+			err = r.Client.Patch(ctx, &managementCluster, client.MergeFrom(orig))
 			if err != nil && !kerrors.IsNotFound(err) {
 				return fmt.Errorf("failed to remov")
 			}

@@ -1,15 +1,26 @@
 package gvk
 
-import "k8s.io/apimachinery/pkg/runtime/schema"
+import (
+	v1unstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
 
 var (
 	ClustersManagementCattle                   = schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "Cluster"}
 	ProjectManagementCattle                    = schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "Project"}
-	TokenManagementCattle                      = schema.GroupVersionKind{Kind: "token", Group: "management.cattle.io", Version: "v3"}
-	UserManagementCattle                       = schema.GroupVersionKind{Kind: "User", Group: "management.cattle.io", Version: "v3"}
+	TokenManagementCattle                      = schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "Token"}
+	UserManagementCattle                       = schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "User"}
 	ProjectRoleTemplateBindingManagementCattle = schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ProjectRoleTemplateBinding"}
 	ClusterRoleTemplateBindingManagementCattle = schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ClusterRoleTemplateBinding"}
 	ClusterRegistrationTokenManagementCattle   = schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ClusterRegistrationToken"}
-
-	ClusterProvisioningCattle = schema.GroupVersionKind{Group: "provisioning.cattle.io", Version: "v1", Kind: "Cluster"}
+	ClusterProvisioningCattle                  = schema.GroupVersionKind{Group: "provisioning.cattle.io", Version: "v1", Kind: "Cluster"}
 )
+
+func ToUnstructured(gvk schema.GroupVersionKind) *v1unstructured.Unstructured {
+	apiVersion, kind := gvk.ToAPIVersionAndKind()
+	return &v1unstructured.Unstructured{
+		Object: map[string]any{
+			"kind":       kind,
+			"apiVersion": apiVersion,
+		}}
+}

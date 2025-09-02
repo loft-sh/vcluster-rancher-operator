@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/loft-sh/vcluster-rancher-operator/pkg/constants"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/rancher"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/unstructured"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/unstructured/gvk"
@@ -21,7 +22,7 @@ type data struct {
 }
 
 func GetToken(ctx context.Context, client unstructured.Client) (string, error) {
-	tokenList, err := client.ListWithLabel(ctx, gvk.TokenManagementCattle, "loft.sh/vcluster-rancher-system-token", "true")
+	tokenList, err := client.ListWithLabel(ctx, gvk.TokenManagementCattle, constants.LabelRancherSystemToken, "true")
 	if err != nil {
 		return "", err
 	}
@@ -33,7 +34,7 @@ func GetToken(ctx context.Context, client unstructured.Client) (string, error) {
 		}
 	}
 
-	systemUser, err := client.GetFirstWithLabel(ctx, gvk.UserManagementCattle, "loft.sh/vcluster-rancher-user", "true")
+	systemUser, err := client.GetFirstWithLabel(ctx, gvk.UserManagementCattle, constants.LabelVClusterRancherUser, "true")
 	if err != nil {
 		return "", err
 	}
@@ -49,7 +50,7 @@ func GetToken(ctx context.Context, client unstructured.Client) (string, error) {
 		"token-vcluster-rancher-operator",
 		"",
 		false,
-		map[string]string{"loft.sh/vcluster-rancher-system-token": "true"},
+		map[string]string{constants.LabelRancherSystemToken: "true"},
 		nil,
 		map[string]interface{}{
 			"authProvider": "local",

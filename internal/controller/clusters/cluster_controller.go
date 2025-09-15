@@ -206,9 +206,14 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 		return fmt.Errorf("vCluster was installed in project [%[1]s] with UID [%[2]s]. Current project [%[1]s] has mismatched UID [%[3]s]", projectName, projectUID, project.GetUID())
 	}
 
-	projectRoleTemplateBindings, err := r.Client.List(ctx, gvk.ProjectRoleTemplateBindingManagementCattle, project.GetName())
+	prtbNamespace := project.GetName()
+	if backingNamespace := unstructured.GetNested[string](project.Object, "status", "backingNamespace"); backingNamespace != "" {
+		prtbNamespace = backingNamespace
+	}
+
+	projectRoleTemplateBindings, err := r.Client.List(ctx, gvk.ProjectRoleTemplateBindingManagementCattle, prtbNamespace)
 	if err != nil {
-		return fmt.Errorf("failed to list projectRoleTemplateBindings that target vCluster's project [%s]: %w", project.GetName(), err)
+		return fmt.Errorf("failed to list projectRoleTemplateBindings that target vCluster's project [%s] in namespace [%s]: %w", project.GetName(), prtbNamespace, err)
 	}
 
 	projectRoleTemplateBindings = unstructured.FilterItems[string](projectRoleTemplateBindings, fmt.Sprintf("%s:%s", project.GetNamespace(), project.GetName()), true, "projectName")

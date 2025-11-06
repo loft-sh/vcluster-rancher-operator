@@ -441,11 +441,10 @@ func (r *ClusterReconciler) SyncResourceLimits(ctx context.Context, logger logr.
 		status = map[string]any{}
 	}
 
-	capacity := map[string]any{}
-	allocatable := map[string]any{}
-	requested := map[string]any{}
+	capacity, _ := status["capacity"].(map[string]any)
+	allocatable, _ := status["allocatable"].(map[string]any)
+	requested, _ := status["requested"].(map[string]any)
 
-	shouldPatch := false
 	for _, resource := range []string{"cpu", "memory"} {
 		limit, hasLimit := hard[corev1.ResourceName("limits."+resource)]
 
@@ -458,19 +457,15 @@ func (r *ClusterReconciler) SyncResourceLimits(ctx context.Context, logger logr.
 		if hasRequest {
 			requested[resource] = req.String()
 		}
-
-		shouldPatch = shouldPatch || hasRequest || hasLimit
 	}
 
-	// Don't bother patching if nothing was set
-	if !shouldPatch {
-		return nil
+	if podCount, hasPodCount := hard[corev1.ResourceName("count/pods")]; hasPodCount {
+		allocatable["pods"] = podCount
 	}
 
 	status["capacity"] = capacity
 	status["allocatable"] = allocatable
 	status["requested"] = requested
-
 	managementCluster.Object["status"] = status
 
 	if err := r.Client.Patch(ctx, &managementCluster, client.MergeFrom(orig)); err != nil {

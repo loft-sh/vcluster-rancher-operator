@@ -1,0 +1,7 @@
+apiVersion: catalog.cattle.io/v1
+kind: ClusterRepo
+metadata:
+  name: vcluster
+spec:
+  url: https://charts.loft.sh
+

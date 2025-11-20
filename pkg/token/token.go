@@ -24,13 +24,13 @@ type data struct {
 func GetToken(ctx context.Context, client unstructured.Client) (string, error) {
 	tokenList, err := client.ListWithLabel(ctx, gvk.TokenManagementCattle, constants.LabelRancherSystemToken, "true")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to list tokens with vcluster rancher system token label [\"%s\": \"true\"]: %w", constants.LabelRancherSystemToken, err)
 	}
 
 	for index := range tokenList.Items {
 		err = client.Delete(ctx, &tokenList.Items[index])
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("failed to delete left over vcluster rancher system tokens: %w", err)
 		}
 	}
 

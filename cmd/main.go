@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/loft-sh/vcluster-rancher-operator/pkg/config"
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -224,6 +225,7 @@ func main() {
 	if err = (&clusters.ClusterReconciler{
 		Client:       unstructured.Client{Client: mgr.GetClient()},
 		Scheme:       mgr.GetScheme(),
+		Config:       config.LoadConfigFromEnv(),
 		RancherToken: rancherToken,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.WithValues("controller", "Cluster").Error(err, "unable to create controller")

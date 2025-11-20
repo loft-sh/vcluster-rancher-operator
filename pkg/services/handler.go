@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/loft-sh/vcluster-rancher-operator/pkg/config"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/constants"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/unstructured"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/unstructured/gvk"
@@ -18,6 +19,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	v1unstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -35,9 +37,17 @@ type Handler struct {
 	ClusterUnstructuredClient unstructured.Client
 	ClusterClient             *kubernetes.Clientset
 	ClusterName               string
+	Config                    config.Config
 }
 
-var _ cache.ResourceEventHandler = (*Handler)(nil)
+var (
+	_ cache.ResourceEventHandler = (*Handler)(nil)
+
+	// we always exclude labels with our label prefixes. Otherwise, the labels this operator depend on will be removed causing it to malfunction.
+	// helm labels are also excluded to prevent confusion. Most other labels will be user supplied or at least indirectly user controlled.
+	labelKeyPrefixesToPreventFromSyncing = []string{"loft.sh/", "vcluster.loft.sh/", "app.kubernetes.io/"}
+	labelKeysToPreventFromSyncing        = []string{"helm", "app", "heritage", "release"}
+)
 
 func (h *Handler) OnAdd(obj interface{}, isInInitialList bool) {
 	err := h.deployvClusterRancherCluster(obj)
@@ -79,16 +89,6 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 		return fmt.Errorf("failed to get vCluster's namespace [%s]: %w", service.Namespace, err)
 	}
 
-	pods, err := h.ClusterClient.CoreV1().Pods(service.Namespace).List(h.Ctx, v1.ListOptions{LabelSelector: "app=cattle-cluster-agent"})
-	if err != nil {
-		return fmt.Errorf("failed listing rancher cluster agent pods: %w", err)
-	}
-
-	if len(pods.Items) > 0 {
-		logger.Info("a rancher cluster agent pod already exists in namespace, skipping")
-		return nil
-	}
-
 	provisioningCluster, err := h.LocalUnstructuredClient.GetFirstWithLabel(h.Ctx, gvk.ClusterProvisioningCattle, constants.LabelVClusterServiceUID, string(service.GetUID()))
 	if client.IgnoreNotFound(err) != nil {
 		return fmt.Errorf("error getting provisioning cluster for vCluster instance: %w", err)
@@ -119,7 +119,7 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 			h.Ctx,
 			gvk.ClusterProvisioningCattle,
 			fmt.Sprintf("%s-%s-%s", h.ClusterName, service.Namespace, service.Name),
-			"fleet-default", false,
+			h.getTargetClusterNamespace(labels[constants.LabelProjectUID]), false,
 			labels,
 			nil,
 			nil)
@@ -128,19 +128,15 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 		}
 	}
 
-	if unstructured.GetNested[bool](provisioningCluster.Object, "status", "ready") {
-		logger.Info("agent has already been deployed for vCluster, skipping")
-		return nil
-	}
-
+	var isReady bool
 	var managementCluster, clusterRegistrationToken v1unstructured.Unstructured
 	err = wait.ExponentialBackoff(wait.Backoff{Duration: 100 * time.Millisecond, Steps: 20, Factor: 1.5},
 		// the use of a backoff retry here is justifiable because we are not using a normal framework that will retry on error on our behalf.
 		func() (bool, error) {
-			logger.Info(fmt.Sprintf("waiting for rancher to create management cluster for vCluster %q: %q", service.Name, service.GetUID()))
 			managementCluster, err = h.LocalUnstructuredClient.GetFirstWithLabel(h.Ctx, gvk.ClustersManagementCattle, constants.LabelVClusterServiceUID, string(service.GetUID()))
 			if err != nil {
 				if kerrors.IsNotFound(err) {
+					logger.Info(fmt.Sprintf("waiting for rancher to create management cluster for vCluster %q: %q", service.Name, service.GetUID()))
 					return false, nil
 				}
 				return false, fmt.Errorf("failed to get management cluster for vCluster: %w", err)
@@ -148,6 +144,23 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 			logger.Info("successfully retrieved management cluster for vCluster")
 
 			orig := managementCluster.DeepCopy()
+
+			logger.Info("syncing labels")
+			labels := managementCluster.GetLabels()
+			h.syncLabels(service.Labels, labels)
+			managementCluster.SetLabels(labels)
+
+			if unstructured.GetNested[bool](provisioningCluster.Object, "status", "ready") {
+				isReady = true
+				if err := h.LocalUnstructuredClient.Patch(h.Ctx, &managementCluster, client.MergeFrom(orig)); err != nil {
+					if kerrors.IsConflict(err) {
+						return false, nil
+					}
+					return false, fmt.Errorf("failed to patch ready management cluster: %w", err)
+				}
+				return true, nil
+			}
+
 			// If the annotation is set and the finalizer is not present, add it along with the target app label
 			// Otherwise, remove the finalizer
 			if service.GetAnnotations()[constants.AnnotationUninstallOnDelete] == "true" {
@@ -165,7 +178,7 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 				if kerrors.IsConflict(err) {
 					return false, nil
 				}
-				return false, fmt.Errorf("failed to add app cleanup finalizer %q to management cluster: %w", constants.AnnotationUninstallOnDelete, err)
+				return false, fmt.Errorf("failed to patch pending management cluster: %w", err)
 			}
 
 			logger.Info("waiting for rancher to create cluster registration token for vCluster")
@@ -191,6 +204,21 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 		})
 	if err != nil {
 		return fmt.Errorf("failed waiting for rancher to create resource(s) for vCluster: %w", err)
+	}
+
+	pods, err := h.ClusterClient.CoreV1().Pods(service.Namespace).List(h.Ctx, v1.ListOptions{LabelSelector: "app=cattle-cluster-agent"})
+	if err != nil {
+		return fmt.Errorf("failed listing rancher cluster agent pods: %w", err)
+	}
+
+	if isReady {
+		logger.Info("agent has already been deployed for vCluster, skipping")
+		return nil
+	}
+
+	if len(pods.Items) > 0 {
+		logger.Info("a rancher cluster agent pod already exists in namespace, skipping")
+		return nil
 	}
 
 	command := unstructured.GetNested[string](clusterRegistrationToken.Object, "status", "insecureCommand")
@@ -282,4 +310,48 @@ func (h *Handler) deletevClusterRancherCluster(obj interface{}) error {
 	}
 
 	return nil
+}
+
+func (h *Handler) syncLabels(from, to map[string]string) {
+	keysToSync := make(map[string]struct{})
+	for _, k := range h.Config.ServiceSyncIncludeLabelKeys {
+		keysToSync[k] = struct{}{}
+	}
+
+	keys := sets.NewString(append(sets.StringKeySet(from).UnsortedList(), sets.StringKeySet(to).UnsortedList()...)...)
+
+	for _, k := range keys.List() {
+		if slices.ContainsFunc[[]string, string](h.Config.ServiceSyncIncludeLabelKeysWithPrefix, func(s string) bool {
+			return strings.HasPrefix(k, s)
+		}) {
+			keysToSync[k] = struct{}{}
+		}
+	}
+
+	keysToExclude := sets.NewString(append(labelKeysToPreventFromSyncing, h.Config.ServiceSyncExcludeLabelKeys...)...).List()
+	for _, k := range keysToExclude {
+		delete(keysToSync, k)
+	}
+
+	keyPrefixesToExclude := sets.NewString(append(labelKeyPrefixesToPreventFromSyncing, h.Config.ServiceSyncExcludeLabelKeysWithPrefix...)...).List()
+	for k := range keysToSync {
+		if slices.ContainsFunc[[]string, string](keyPrefixesToExclude, func(s string) bool {
+			return strings.HasPrefix(k, s)
+		}) {
+			continue
+		}
+
+		if from[k] == "" {
+			delete(to, k)
+			continue
+		}
+		to[k] = from[k]
+	}
+}
+
+func (h *Handler) getTargetClusterNamespace(projectUID string) string {
+	if projectUID != "" && h.Config.FleetProjectUIDToWorkspaceMappings[projectUID] != "" {
+		return h.Config.FleetProjectUIDToWorkspaceMappings[projectUID]
+	}
+	return h.Config.FleetDefaultWorkspace
 }

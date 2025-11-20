@@ -46,14 +46,21 @@ spec:
             port: 8081
           initialDelaySeconds: 5
           periodSeconds: 10
-        resources:
-          limits:
-            cpu: 2000m
-            memory: 1024Mi
-          requests:
-            cpu: 10m
-            memory: 64Mi
         volumeMounts: []
+        {{- $m := default (dict) .Values.fleet.projectUIDToWorkspaceMappings -}} # TODO: make sure that the map to comma separated string logic work
+        {{- $pairs := list -}}
+        {{- range $k, $v := $m }}
+          {{- $pairs = append $pairs (printf "%s:%s" $k $v) -}}
+        {{- end }}
+        env:
+          - name: VCLUSTER_FLEET_DEFAULT_WORKSPACE
+            value: {{ .Values.fleet.defaultWorkspace }}
+          - name: VCLUSTER_FLEET_PROJ_UID_WORKSPACE_MAPPINGS
+            value: {{ join "," $pairs | quote }}
+          - name: VCLUSTER_SYNC_INCLUDE_LABEL_KEYS
+            value: {{ join "," (default (list) (.Values.syncLabels.includeKeys | default (list)) ) | quote }}
+          - name: VCLUSTER_SYNC_EXCLUDE_LABEL_KEYS
+            value: {{ join "," (default (list) (.Values.syncLabels.excludeKeys | default (list)) ) | quote }}
       volumes: []
       serviceAccountName: vcluster-rancher-operator
       terminationGracePeriodSeconds: 10

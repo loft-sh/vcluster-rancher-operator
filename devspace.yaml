@@ -1,9 +1,44 @@
 version: v2beta1
 name: vcluster-rancher-operator
 
+vars:
+  ADMIN_PASSWORD: test123
+  # if you are on linux set --var=LOCAL_DOCKER_HOST=172.17.0.1
+  LOCAL_DOCKER_HOST: "host.docker.internal"
+  IMAGE_CERTMANAGER: quay.io/jetstack/cert-manager-controller
+  IMAGE_RANCHER: rancher/rancher
+
 pipelines:
   dev:
+    flags:
+      - name: rancher
+        type: bool
+        default: false
     run: |-
+      deployments=("app")
+
+      if is_equal $(get_flag rancher) "false"; then
+        echo "if you want to deploy rancher run 'devspace dev --rancher'"
+      else
+        create_deployments cert-manager
+        wait_pod --image-selector=${IMAGE_CERTMANAGER} --namespace cert-manager
+        
+        create_deployments rancher
+        wait_pod --image-selector=${IMAGE_RANCHER} --namespace cattle-system
+        
+        start_dev rancher
+        API_KEY=$(curl -k -s https://${LOCAL_DOCKER_HOST}:7443/v3-public/localProviders/local?action=login -H 'content-type: application/json' --data-binary '{"username":"admin","password":"'${ADMIN_PASSWORD}'","ttl":60000}' | jq -r .token)
+
+        # Set server-url
+        curl -k -s https://${LOCAL_DOCKER_HOST}:7443/v3/settings/server-url -H 'Content-Type: application/json' -H "Authorization: Bearer ${API_KEY}" -X PUT --data-binary '{"name":"server-url","value":"https://'${LOCAL_DOCKER_HOST}':7443"}' -o /dev/null
+
+        # patch preference so pre-release versions of vcluster-rancher-operator show
+        kubectl patch -n user-h7vp5 preferences.management.cattle.io show-pre-release --type=merge -p '{"value":"true"}'
+
+        # setup vcluster chart repository
+        kubectl apply -f ./hack/manifests
+      fi
+
       run_dependencies --all       # 1. Deploy any projects this project needs (see "dependencies")
       ensure_pull_secrets --all    # 2. Ensure pull secrets
       create_deployments --all     # 3. Deploy Helm charts and manifests specfied as "deployments"
@@ -21,6 +56,28 @@ deployments:
     helm:
       chart:
        name: ./chart
+  rancher:
+    helm:
+      chart:
+        name: rancher
+        repo: https://releases.rancher.com/server-charts/stable
+        version: 2.12.3
+      values:
+        bootstrapPassword: ${ADMIN_PASSWORD}
+        hostname: ${LOCAL_DOCKER_HOST}.sslip.io
+        replicas: 1
+
+    namespace: cattle-system
+
+  cert-manager:
+    helm:
+      chart:
+        name: cert-manager
+        repo: https://charts.jetstack.io
+        version: 1.14.2
+      values:
+        installCRDs: true
+    namespace: cert-manager
 
 # This is a list of `dev` containers that are based on the containers created by your deployments
 dev:
@@ -46,3 +103,11 @@ dev:
       - gitCredentials: true
     ports:
       - port: 23450:2345
+
+  rancher:
+    imageSelector: ${IMAGE_RANCHER}
+    namespace: cattle-system
+    ports:
+      - port: 7443:443
+        bindAddress: ${LOCAL_DOCKER_HOST}
+

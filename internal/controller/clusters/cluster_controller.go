@@ -30,6 +30,7 @@ import (
 	"sync"
 
 	"github.com/go-logr/logr"
+	"github.com/loft-sh/vcluster-rancher-operator/pkg/config"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/constants"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/rancher"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/services"
@@ -72,6 +73,7 @@ var httpClient = http.Client{
 type ClusterReconciler struct {
 	Client unstructured.Client
 	Scheme *runtime.Scheme
+	Config config.Config
 
 	sync.Map
 	lock         sync.RWMutex
@@ -140,6 +142,7 @@ func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logg
 		ClusterUnstructuredClient: unstructuredClusterClient,
 		ClusterClient:             clusterClient,
 		ClusterName:               clusterName,
+		Config:                    r.Config,
 	})
 	if err != nil {
 		return err
@@ -199,7 +202,7 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 
 	project, err := r.Client.Get(ctx, gvk.ProjectManagementCattle, projectName, hostClusterName)
 	if err != nil {
-		return fmt.Errorf("failed to get vCluster's project [%s/%s]: %w", managementCluster.GetName(), projectName, err)
+		return fmt.Errorf("failed to get vCluster's project [%s/%s]: %w", hostClusterName, projectName, err)
 	}
 
 	if string(project.GetUID()) != projectUID {

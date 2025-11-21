@@ -12,3 +12,13 @@ image:
   registry: "ghcr.io"
   repository: "loft-sh/vcluster-rancher-operator"
   tag: ""
+
+fleet:
+  defaultWorkspace: "fleet-default"
+  projectUIDToWorkspaceMappings: {}
+
+# syncLabels syncs labels from the vcluster service to it corresponding cluster objects
+# includeKeys and excludeKeys support key-prefixes in the format of "<key>*", for example "org.company/*". "*" is also supported.
+syncLabels:
+  includeKeys: []
+  excludeKeys: []

@@ -235,6 +235,9 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 				ObjectMeta: v1.ObjectMeta{
 					Name:      "rancher-cluster-agent-install-job",
 					Namespace: service.Namespace,
+					Labels: map[string]string{
+						"app": "rancher-agent-install",
+					},
 				},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{

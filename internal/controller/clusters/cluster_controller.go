@@ -28,10 +28,12 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/config"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/constants"
+	"github.com/loft-sh/vcluster-rancher-operator/pkg/queue"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/rancher"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/services"
 	"github.com/loft-sh/vcluster-rancher-operator/pkg/token"
@@ -78,7 +80,7 @@ type ClusterReconciler struct {
 	sync.Map
 	lock         sync.RWMutex
 	RancherToken string
-	peers        map[string]struct{}
+	peers        map[string]context.CancelFunc
 }
 
 // +kubebuilder:rbac:groups=management.cattle.io,resources=clusters;tokens,verbs=get;list;watch;create;update;patch;delete
@@ -94,17 +96,25 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	managementCluster, err := r.Client.Get(ctx, gvk.ClustersManagementCattle, req.Name, "")
 	if err != nil {
 		if kerrors.IsNotFound(err) {
+			r.lock.Lock()
+			if cancel, ok := r.peers[req.Name]; ok {
+				logger.Info(fmt.Sprintf("stopping handler and informer for deleted cluster %s", req.Name))
+				cancel()
+				delete(r.peers, req.Name)
+			}
+			r.lock.Unlock()
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
 
+	staleErr := r.SyncStaleResources(ctx, logger, managementCluster)
 	cleanupErr := r.SyncCleanup(ctx, logger, managementCluster)
 	rbacErr := r.SyncRancherRBAC(ctx, logger, managementCluster)
 	installErr := r.SyncvClusterInstallHandler(ctx, logger, managementCluster.GetName())
 	metricsErr := r.SyncResourceLimits(ctx, logger, managementCluster)
 
-	return ctrl.Result{}, errors.Join(cleanupErr, rbacErr, installErr, metricsErr)
+	return ctrl.Result{}, errors.Join(staleErr, cleanupErr, rbacErr, installErr, metricsErr)
 }
 
 func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logger logr.Logger, clusterName string) error {
@@ -125,7 +135,7 @@ func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logg
 		return err
 	}
 
-	sharedInformer := cache.NewSharedInformer(&cache.ListWatch{
+	sharedInformer := cache.NewSharedIndexInformer(&cache.ListWatch{
 		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 			options.LabelSelector = "app=vcluster"
 			return clusterClient.CoreV1().Services("").List(ctx, options)
@@ -134,9 +144,10 @@ func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logg
 			options.LabelSelector = "app=vcluster"
 			return clusterClient.CoreV1().Services("").Watch(ctx, options)
 		},
-	}, &corev1.Service{}, 0)
+	}, &corev1.Service{}, time.Hour, cache.Indexers{})
 
-	_, err = sharedInformer.AddEventHandler(&services.Handler{
+	// create the reconciler handler
+	handler := &services.Handler{
 		Ctx:                       ctx,
 		Logger:                    logger,
 		LocalUnstructuredClient:   r.Client,
@@ -144,19 +155,32 @@ func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logg
 		ClusterClient:             clusterClient,
 		ClusterName:               clusterName,
 		Config:                    r.Config,
-	})
+		Indexer:                   sharedInformer.GetIndexer(),
+	}
+
+	// wrap the handler with queue processing and concurrent workers.
+	// We use a custom workqueue-based handler here instead of a controller-runtime Manager for each host cluster.
+	// Managers are designed to be used on start up until program exit; they cannot be stopped simply and
+	// often leave leaked goroutines. This approach also avoids the overhead of dozens of redundant HTTP
+	// servers (metrics, health probes) for every cluster, making cleanup as simple as a single context cancellation.
+	queuedHandler := queue.NewHandler(handler, sharedInformer.GetIndexer(), logger, 5, []error{services.ErrRancherResourcesPending, services.ErrAgentInstallJobInProgress})
+
+	_, err = sharedInformer.AddEventHandler(queuedHandler)
 	if err != nil {
 		return err
 	}
 
+	clusterCtx, cancel := context.WithCancel(ctx)
+
 	if r.peers == nil {
-		r.peers = make(map[string]struct{})
+		r.peers = make(map[string]context.CancelFunc)
 	}
-	r.peers[clusterName] = struct{}{}
+	r.peers[clusterName] = cancel
 
 	go func() {
 		logger.Info(fmt.Sprintf("starting handler for %s's vclusters\n", clusterName))
-		sharedInformer.Run(ctx.Done())
+		go queuedHandler.Start(clusterCtx)
+		sharedInformer.Run(clusterCtx.Done())
 		logger.Info(fmt.Sprintf("finished running handler for %s's vclusters\n", clusterName))
 	}()
 	return nil
@@ -193,7 +217,7 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 	}
 
 	if projectName == "" || projectUID == "" || hostClusterName == "" {
-		if projectUID == constants.NoRancherProjectOnNameSpace {
+		if projectUID == constants.ValueNoRancherProjectOnNameSpace {
 			return nil
 		}
 		logger.Info(fmt.Sprintf("vCluster management cluster %q missing at least 1 vCluster label(s)", managementCluster.GetName()))
@@ -534,6 +558,67 @@ func (r *ClusterReconciler) clustersHostedByClusterTarget(ctx context.Context, o
 		return nil
 	})
 	return requests
+}
+
+// SyncStaleResources checks if the vCluster service still exists in the host cluster.
+// If the service is gone, this deletes the management cluster (and its provisioning cluster via owner reference).
+// This handles the case where services were deleted while the operator was offline.
+func (r *ClusterReconciler) SyncStaleResources(ctx context.Context, logger logr.Logger, managementCluster v1unstructured.Unstructured) error {
+	serviceUID := managementCluster.GetLabels()[constants.LabelVClusterServiceUID]
+	hostClusterName := managementCluster.GetLabels()[constants.LabelHostClusterName]
+
+	// not a vCluster management cluster
+	if serviceUID == "" || hostClusterName == "" {
+		return nil
+	}
+
+	// get the host cluster client
+	r.lock.RLock()
+	_, hasInformer := r.peers[hostClusterName]
+	r.lock.RUnlock()
+
+	if !hasInformer {
+		// informer not yet started for this cluster, skip check
+		return nil
+	}
+
+	restConfig, err := token.RestConfigFromToken(hostClusterName, r.RancherToken)
+	if err != nil {
+		return fmt.Errorf("failed to get rest config for host cluster %s: %w", hostClusterName, err)
+	}
+
+	clusterClient, _, err := getClusterClient(restConfig)
+	if err != nil {
+		return fmt.Errorf("failed to get cluster client for host cluster %s: %w", hostClusterName, err)
+	}
+
+	// list all services with app=vcluster label
+	services, err := clusterClient.CoreV1().Services("").List(ctx, metav1.ListOptions{
+		LabelSelector: "app=vcluster",
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list services in host cluster %s: %w", hostClusterName, err)
+	}
+
+	// check if service with matching UID exists
+	for _, svc := range services.Items {
+		if string(svc.UID) == serviceUID {
+			// service exists, not stale
+			return nil
+		}
+	}
+
+	// service not found - this is stale, delete the management cluster
+	logger.Info("vCluster service no longer exists, deleting stale management cluster",
+		"managementCluster", managementCluster.GetName(),
+		"serviceUID", serviceUID,
+		"hostCluster", hostClusterName)
+
+	if err := r.Client.Delete(ctx, &managementCluster); err != nil && !kerrors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete stale management cluster %s: %w", managementCluster.GetName(), err)
+	}
+
+	return nil
 }
 
 func parseHalves(name, separator string) (string, string, error) {

@@ -1,11 +1,11 @@
 package constants
 
 const (
+
+	// legacy annotations
+
 	AnnotationSkipImport           = "loft.sh/vcluster-skip-import"
 	AnnotationUninstallOnDelete    = "loft.sh/uninstall-on-cluster-delete"
-	AnnotationCustomName           = "platform.vcluster.com/custom-name"
-	AnnotationCustomNamePrefix     = "platform.vcluster.com/custom-name-prefix"
-	NoRancherProjectOnNameSpace    = "no-rancher-project-on-namespace"
 	LabelProjectUID                = "loft.sh/vcluster-project-uid"
 	LabelProjectName               = "loft.sh/vcluster-project"
 	LabelHostClusterName           = "loft.sh/vcluster-host-cluster"
@@ -16,4 +16,11 @@ const (
 	LabelRancherSystemToken        = "loft.sh/vcluster-rancher-system-token"
 	LabelVClusterRancherUser       = "loft.sh/vcluster-rancher-user"
 	FinalizerVClusterApp           = "loft.sh/vcluster-app-cleanup"
+
+	// going forward, we will use the "platform.vcluster.com" prefix
+
+	AnnotationCustomName       = "platform.vcluster.com/custom-name"
+	AnnotationCustomNamePrefix = "platform.vcluster.com/custom-name-prefix"
+
+	ValueNoRancherProjectOnNameSpace = "no-rancher-project-on-namespace"
 )

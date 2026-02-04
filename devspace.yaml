@@ -32,8 +32,17 @@ pipelines:
         # Set server-url
         curl -k -s https://${LOCAL_DOCKER_HOST}:7443/v3/settings/server-url -H 'Content-Type: application/json' -H "Authorization: Bearer ${API_KEY}" -X PUT --data-binary '{"name":"server-url","value":"https://'${LOCAL_DOCKER_HOST}':7443"}' -o /dev/null
 
-        # patch preference so pre-release versions of vcluster-rancher-operator show
-        kubectl patch -n user-h7vp5 preferences.management.cattle.io show-pre-release --type=merge -p '{"value":"true"}'
+        # ensure preference so pre-release versions of vcluster-rancher-operator show
+        RANCHER_USER=$(kubectl get users -o name | grep "user-" | head -n 1 | cut -d'/' -f2)
+        kubectl create namespace ${RANCHER_USER} --dry-run=client -o yaml | kubectl apply -f -
+        echo '
+        apiVersion: management.cattle.io/v3
+        kind: Preference
+        metadata:
+          name: show-pre-release
+          namespace: '"${RANCHER_USER}"'
+        value: "true"
+        ' | kubectl apply -n ${RANCHER_USER} -f -
 
         # setup vcluster chart repository
         kubectl apply -f ./hack/manifests
@@ -61,7 +70,7 @@ deployments:
       chart:
         name: rancher
         repo: https://releases.rancher.com/server-charts/stable
-        version: 2.12.3
+        version: 2.13.2
       values:
         bootstrapPassword: ${ADMIN_PASSWORD}
         hostname: ${LOCAL_DOCKER_HOST}.sslip.io

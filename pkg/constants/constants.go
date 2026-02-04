@@ -3,6 +3,8 @@ package constants
 const (
 	AnnotationSkipImport           = "loft.sh/vcluster-skip-import"
 	AnnotationUninstallOnDelete    = "loft.sh/uninstall-on-cluster-delete"
+	AnnotationCustomName           = "platform.vcluster.com/custom-name"
+	AnnotationCustomNamePrefix     = "platform.vcluster.com/custom-name-prefix"
 	NoRancherProjectOnNameSpace    = "no-rancher-project-on-namespace"
 	LabelProjectUID                = "loft.sh/vcluster-project-uid"
 	LabelProjectName               = "loft.sh/vcluster-project"

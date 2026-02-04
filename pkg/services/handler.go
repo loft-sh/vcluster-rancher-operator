@@ -115,11 +115,15 @@ func (h *Handler) deployvClusterRancherCluster(obj interface{}) error {
 			labels[constants.LabelProjectUID] = constants.NoRancherProjectOnNameSpace
 		}
 
+		clusterName, useGenName, err := h.getProvisioningClusterName(service)
+		if err != nil {
+			return fmt.Errorf("failed to generate provisioning cluster name: %w", err)
+		}
 		provisioningCluster, err = h.LocalUnstructuredClient.Create(
 			h.Ctx,
 			gvk.ClusterProvisioningCattle,
-			fmt.Sprintf("%s-%s-%s", h.ClusterName, service.Namespace, service.Name),
-			h.getTargetClusterNamespace(labels[constants.LabelProjectUID]), false,
+			clusterName,
+			h.getTargetClusterNamespace(labels[constants.LabelProjectUID]), useGenName,
 			labels,
 			nil,
 			nil)
@@ -347,6 +351,49 @@ func (h *Handler) syncLabels(from, to map[string]string) {
 		}
 		to[k] = from[k]
 	}
+}
+
+func (h *Handler) getProvisioningClusterName(service *corev1.Service) (name string, genName bool, err error) {
+	// Check for custom name annotation
+	if customName, ok := service.Annotations[constants.AnnotationCustomName]; ok && customName != "" {
+		if len(customName) > 63 {
+			return "", false, fmt.Errorf("custom name %q exceeds 63 character limit", customName)
+		}
+		return customName, false, nil
+	}
+
+	// Check for custom name prefix annotation
+	if customPrefix, ok := service.Annotations[constants.AnnotationCustomNamePrefix]; ok && customPrefix != "" {
+		hasHyphen := strings.HasSuffix(customPrefix, "-")
+		maxLen := 57
+		if hasHyphen {
+			maxLen = 58
+		}
+		if len(customPrefix) > maxLen {
+			return "", false, fmt.Errorf("custom name prefix %q exceeds %d character limit (must leave room for hyphen and 5 generated chars)", customPrefix, maxLen)
+		}
+		if !hasHyphen {
+			customPrefix += "-"
+		}
+		return customPrefix, true, nil
+	}
+
+	// Use default name format
+	name = fmt.Sprintf("%s-%s-%s", h.ClusterName, service.Namespace, service.Name)
+	if len(name) <= 63 {
+		return name, false, nil
+	}
+
+	// Default name is too long, use it as generateName
+	// Trim to 57 chars to leave room for the trailing hyphen and 5 chars added by generateName
+	if len(name) > 57 {
+		name = name[:57]
+	}
+	if !strings.HasSuffix(name, "-") {
+		name += "-"
+	}
+
+	return name, true, nil
 }
 
 func (h *Handler) getTargetClusterNamespace(projectUID string) string {

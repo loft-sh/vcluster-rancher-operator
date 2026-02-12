@@ -102,8 +102,9 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	cleanupErr := r.SyncCleanup(ctx, logger, managementCluster)
 	rbacErr := r.SyncRancherRBAC(ctx, logger, managementCluster)
 	installErr := r.SyncvClusterInstallHandler(ctx, logger, managementCluster.GetName())
+	metricsErr := r.SyncResourceLimits(ctx, logger, managementCluster)
 
-	return ctrl.Result{}, errors.Join(cleanupErr, rbacErr, installErr)
+	return ctrl.Result{}, errors.Join(cleanupErr, rbacErr, installErr, metricsErr)
 }
 
 func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logger logr.Logger, clusterName string) error {
@@ -270,7 +271,7 @@ func (r *ClusterReconciler) SyncRancherRBAC(ctx context.Context, logger logr.Log
 					parentLabel:                       item.GetName(),
 				},
 				nil,
-				map[string]interface{}{
+				map[string]any{
 					"userName":         user,
 					"clusterName":      managementCluster.GetName(),
 					"roleTemplateName": "cluster-owner"})
@@ -380,6 +381,100 @@ func (r *ClusterReconciler) SyncCleanup(ctx context.Context, logger logr.Logger,
 			break
 		}
 	}
+	return nil
+}
+
+// SyncResourceLimits uses information from the vCluster's resource quota (if configured), to display the vCluster
+// limits rather than the host cluster's resources.
+func (r *ClusterReconciler) SyncResourceLimits(ctx context.Context, logger logr.Logger, managementCluster v1unstructured.Unstructured) error {
+	hostClusterName := managementCluster.GetLabels()[constants.LabelHostClusterName]
+	vClusterServiceUID := managementCluster.GetLabels()[constants.LabelVClusterServiceUID]
+
+	// not a vcluster management cluster or missing required labels
+	if hostClusterName == "" || vClusterServiceUID == "" {
+		return nil
+	}
+
+	// Get the host cluster client to find the vCluster service
+	restConfig, err := token.RestConfigFromToken(hostClusterName, r.RancherToken)
+	if err != nil {
+		return fmt.Errorf("failed to get rest config for host cluster: %w", err)
+	}
+
+	hostClusterClient, _, err := getClusterClient(restConfig)
+	if err != nil {
+		return fmt.Errorf("failed to get host cluster client: %w", err)
+	}
+
+	// Find the vCluster service by UID
+	svcs, err := hostClusterClient.CoreV1().Services("").List(ctx, metav1.ListOptions{
+		LabelSelector: "app=vcluster",
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list vCluster services: %w", err)
+	}
+
+	var vClusterService *corev1.Service
+	for i := range svcs.Items {
+		if string(svcs.Items[i].GetUID()) == vClusterServiceUID {
+			vClusterService = &svcs.Items[i]
+			break
+		}
+	}
+
+	if vClusterService == nil {
+		logger.V(1).Info("vCluster service not found, skipping resource metrics sync")
+		return nil
+	}
+
+	resourceQuota, err := hostClusterClient.CoreV1().ResourceQuotas(vClusterService.Namespace).Get(ctx, "vc-"+vClusterService.Name, metav1.GetOptions{})
+	if err != nil {
+		if kerrors.IsNotFound(err) {
+			return nil
+		}
+
+		return fmt.Errorf("failed to get resource quota: %w", err)
+	}
+
+	hard := resourceQuota.Status.Hard
+
+	orig := managementCluster.DeepCopy()
+	status := unstructured.GetNested[map[string]any](managementCluster.Object, "status")
+	if status == nil {
+		status = map[string]any{}
+	}
+
+	capacity, _ := status["capacity"].(map[string]any)
+	allocatable, _ := status["allocatable"].(map[string]any)
+	requested, _ := status["requested"].(map[string]any)
+
+	for _, resource := range []string{"cpu", "memory"} {
+		limit, hasLimit := hard[corev1.ResourceName("limits."+resource)]
+
+		if hasLimit {
+			capacity[resource] = limit.String()
+			allocatable[resource] = limit.String()
+		}
+
+		req, hasRequest := hard[corev1.ResourceName("requests."+resource)]
+		if hasRequest {
+			requested[resource] = req.String()
+		}
+	}
+
+	if podCount, hasPodCount := hard[corev1.ResourceName("count/pods")]; hasPodCount {
+		allocatable["pods"] = podCount
+	}
+
+	status["capacity"] = capacity
+	status["allocatable"] = allocatable
+	status["requested"] = requested
+	managementCluster.Object["status"] = status
+
+	if err := r.Client.Patch(ctx, &managementCluster, client.MergeFrom(orig)); err != nil {
+		return fmt.Errorf("failed to update management cluster status with resource metrics: %w", err)
+	}
+
 	return nil
 }
 

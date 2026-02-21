@@ -57,19 +57,22 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-var httpClient = http.Client{
-	Transport: &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
+var (
+	httpClient = http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
 		},
-	},
-}
+	}
+)
 
 // ClusterReconciler reconciles a Cluster object
 type ClusterReconciler struct {
@@ -108,16 +111,33 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
+	if displayName := unstructured.GetNested[string](managementCluster.Object, "spec", "displayName"); displayName != "" {
+		logger = logger.WithValues("displayName", displayName)
+	}
+
 	staleErr := r.SyncStaleResources(ctx, logger, managementCluster)
 	cleanupErr := r.SyncCleanup(ctx, logger, managementCluster)
 	rbacErr := r.SyncRancherRBAC(ctx, logger, managementCluster)
-	installErr := r.SyncvClusterInstallHandler(ctx, logger, managementCluster.GetName())
-	metricsErr := r.SyncResourceLimits(ctx, logger, managementCluster)
 
-	return ctrl.Result{}, errors.Join(staleErr, cleanupErr, rbacErr, installErr, metricsErr)
+	var installErr, metricsErr error
+	if !isClusterReady(managementCluster) {
+		logger.Info("host cluster not yet ready, will retry when Ready condition is \"True\"", "cluster", req.Name)
+	} else {
+		installErr = r.SyncvClusterInstallHandler(ctx, logger, managementCluster)
+		metricsErr = r.SyncResourceLimits(ctx, logger, managementCluster)
+	}
+
+	if err := errors.Join(staleErr, cleanupErr, rbacErr, installErr, metricsErr); err != nil {
+		logger.Error(err, "Reconciler error")
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	return ctrl.Result{}, nil
 }
 
-func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logger logr.Logger, clusterName string) error {
+func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logger logr.Logger, managementCluster v1unstructured.Unstructured) error {
+	clusterName := managementCluster.GetName()
+
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -184,6 +204,23 @@ func (r *ClusterReconciler) SyncvClusterInstallHandler(ctx context.Context, logg
 		logger.Info(fmt.Sprintf("finished running handler for %s's vclusters\n", clusterName))
 	}()
 	return nil
+}
+
+func isClusterReady(cluster v1unstructured.Unstructured) bool {
+	conditions := unstructured.GetNested[[]any](cluster.Object, "status", "conditions")
+	if conditions == nil {
+		return false
+	}
+	for _, c := range conditions {
+		condition, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if condition["type"] == "Ready" && condition["status"] == "True" {
+			return true
+		}
+	}
+	return false
 }
 
 func getClusterClient(restConfig *rest.Config) (*kubernetes.Clientset, unstructured.Client, error) {
@@ -515,6 +552,7 @@ func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		).
 		For(gvk.ToUnstructured(gvk.ClustersManagementCattle)).
 		Named("cluster").
+		WithOptions(controller.Options{MaxConcurrentReconciles: 10}).
 		Complete(r)
 }
 

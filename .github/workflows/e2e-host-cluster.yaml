@@ -1,0 +1,95 @@
+name: E2E - Host Cluster
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host-cluster:
+    name: Setup host cluster with vcluster (docker driver)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Load required kernel modules
+        # On GitHub Actions VMs sudo is passwordless; on local runs (act -self-hosted)
+        # the modules are usually already loaded so the commands are best-effort.
+        # sudo -n exits immediately without blocking for a password prompt.
+        continue-on-error: true
+        run: |
+          sudo -n modprobe br_netfilter
+          sudo -n modprobe overlay
+          sudo -n sysctl -w net.ipv4.ip_forward=1
+          sudo -n sysctl -w net.bridge.bridge-nf-call-iptables=1
+          sudo -n sysctl -w net.bridge.bridge-nf-call-ip6tables=1
+
+      - name: Download vcluster CLI
+        env:
+          VCLUSTER_VERSION: v0.32.0
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o "$HOME/.local/bin/vcluster" \
+            "https://github.com/loft-sh/vcluster/releases/download/${VCLUSTER_VERSION}/vcluster-linux-amd64"
+          chmod +x "$HOME/.local/bin/vcluster"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/vcluster" version
+
+      - name: Configure Docker daemon
+        # cgroupfs driver is required for K3s-in-Docker on GitHub Actions.
+        # Do NOT set default-cgroupns-mode=host: with host cgroupns, K3s sees the
+        # systemd cgroup hierarchy, assumes systemd is the init, and tries to connect
+        # to D-Bus for logging — which fails inside a Docker container.
+        # With private cgroupns (the Docker default), K3s uses cgroupfs directly.
+        run: |
+          echo '{"exec-opts":["native.cgroupdriver=cgroupfs"]}' \
+            | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+
+      - name: Create vcluster with docker driver
+        run: |
+          vcluster use driver docker
+          vcluster delete host-cluster 2>/dev/null || true
+          vcluster create host-cluster --driver docker --connect=false \
+            --set controlPlane.distro.k8s.version=v1.32.0
+
+      - name: Wait for vcluster to be ready
+        run: |
+          for i in $(seq 1 24); do
+            if vcluster list | grep -qi "running"; then
+              echo "vcluster is ready"
+              break
+            fi
+            echo "Waiting... ($i/24)"
+            sleep 5
+          done
+
+      - name: Connect to vcluster
+        run: |
+          mkdir -p "$HOME/.kube"
+          vcluster connect host-cluster --print > "$HOME/.kube/vcluster.yaml"
+          echo "KUBECONFIG=$HOME/.kube/vcluster.yaml" >> "$GITHUB_ENV"
+
+      - name: Verify vcluster connection
+        run: |
+          kubectl get nodes
+          kubectl get namespaces
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Setup DevSpace
+        uses: loft-sh/setup-devspace@main
+        with:
+          version: v6.3.18
+
+      - name: Run e2e pipeline (Rancher + operator)
+        timeout-minutes: 20
+        run: |
+          devspace run-pipeline e2e \
+            -n vcluster-rancher-operator-system \
+            --var=LOCAL_DOCKER_HOST=172.17.0.1 \
+            --var=ADMIN_PASSWORD=test123

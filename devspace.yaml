@@ -7,6 +7,9 @@ vars:
   LOCAL_DOCKER_HOST: "host.docker.internal"
   IMAGE_CERTMANAGER: quay.io/jetstack/cert-manager-controller
   IMAGE_RANCHER: rancher/rancher
+  IMAGE_OPERATOR: ghcr.io/loft-sh/vcluster-rancher-operator
+  # name of the docker container created by the vcluster docker driver
+  VCLUSTER_CONTAINER: vcluster.cp.host-cluster
 
 pipelines:
   dev:
@@ -22,10 +25,10 @@ pipelines:
       else
         create_deployments cert-manager
         wait_pod --image-selector=${IMAGE_CERTMANAGER} --namespace cert-manager
-        
+
         create_deployments rancher
         wait_pod --image-selector=${IMAGE_RANCHER} --namespace cattle-system
-        
+
         start_dev rancher
         API_KEY=$(curl -k -s https://${LOCAL_DOCKER_HOST}:7443/v3-public/localProviders/local?action=login -H 'content-type: application/json' --data-binary '{"username":"admin","password":"'${ADMIN_PASSWORD}'","ttl":60000}' | jq -r .token)
 
@@ -46,12 +49,96 @@ pipelines:
 
         # setup vcluster chart repository
         kubectl apply -f ./hack/manifests
+
       fi
 
       run_dependencies --all       # 1. Deploy any projects this project needs (see "dependencies")
       ensure_pull_secrets --all    # 2. Ensure pull secrets
       create_deployments --all     # 3. Deploy Helm charts and manifests specfied as "deployments"
       start_dev app                # 4. Start dev mode "app" (see "dev" section)
+
+  e2e:
+    run: |-
+      # 1. Deploy cert-manager and wait
+      create_deployments cert-manager
+      wait_pod --image-selector=${IMAGE_CERTMANAGER} --namespace cert-manager
+
+      # 2. Deploy rancher and wait for pod to be ready
+      create_deployments rancher
+      wait_pod --image-selector=${IMAGE_RANCHER} --namespace cattle-system
+
+      # 3. Start port-forwarding so the runner (outside K3s) can reach Rancher for
+      #    bootstrap API calls and test management kubectl commands.
+      start_dev rancher
+
+      # 4. Wait for the Rancher API to respond (can take a few minutes for initial bootstrap)
+      TIMEOUT=300
+      ELAPSED=0
+      until curl -k -sf "https://${LOCAL_DOCKER_HOST}:7443/ping" > /dev/null 2>&1; do
+        if [ "${ELAPSED}" -ge "${TIMEOUT}" ]; then
+          echo "error: rancher API not ready after ${TIMEOUT}s"
+          exit 1
+        fi
+        echo "Waiting for rancher API... (${ELAPSED}s elapsed)"
+        sleep 10
+        ELAPSED=$((ELAPSED + 10))
+      done
+
+      # 5. Create a separate NodePort service so that pods inside K3s (the registration
+      #    job and cattle-cluster-agent) can reach Rancher directly via kube-proxy
+      #    DNAT rules — bypassing the port-forward whose disconnection would sever
+      #    the agent's persistent WebSocket connection.
+      #    We do NOT modify the existing 'rancher' ClusterIP service so that the
+      #    start_dev port-forward (step 3) remains unaffected.
+      #    Note: the runner uses the port-forward (LOCAL_DOCKER_HOST:7443) for its
+      #    own access; this NodePort is for in-cluster pod → Rancher connectivity only.
+      echo '{"apiVersion":"v1","kind":"Service","metadata":{"name":"rancher-nodeport","namespace":"cattle-system"},"spec":{"type":"NodePort","selector":{"app":"rancher"},"ports":[{"name":"https","port":443,"targetPort":443,"nodePort":30443}]}}' | kubectl apply -f -
+      NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+      echo "Rancher NodePort (agent URL): https://${NODE_IP}:30443"
+
+      # 6. Bootstrap: get API key and set server-url to the NodePort URL.
+      #    Rancher embeds this URL in cluster registration token commands, so the
+      #    registration job and cattle-cluster-agent will connect to the stable
+      #    NodePort instead of the port-forward.
+      API_KEY=$(curl -k -s "https://${LOCAL_DOCKER_HOST}:7443/v3-public/localProviders/local?action=login" \
+        -H 'content-type: application/json' \
+        --data-binary '{"username":"admin","password":"'${ADMIN_PASSWORD}'","ttl":60000}' | jq -r .token)
+
+      curl -k -s "https://${LOCAL_DOCKER_HOST}:7443/v3/settings/server-url" \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer ${API_KEY}" \
+        -X PUT \
+        --data-binary '{"name":"server-url","value":"https://'${NODE_IP}':30443"}' \
+        -o /dev/null
+
+      echo "Rancher is ready. Runner: https://${LOCAL_DOCKER_HOST}:7443 | Agents: https://${NODE_IP}:30443"
+
+      # 7. Wait for Rancher to register management.cattle.io CRDs
+      until kubectl get crd users.management.cattle.io > /dev/null 2>&1; do
+        echo "Waiting for management.cattle.io CRDs..."
+        sleep 5
+      done
+      echo "management.cattle.io CRDs are ready"
+
+      # 8. Build the operator image and load it into the vcluster docker container's containerd
+      docker build -t ${IMAGE_OPERATOR}:e2e .
+      docker save ${IMAGE_OPERATOR}:e2e | docker exec -i ${VCLUSTER_CONTAINER} ctr -n k8s.io images import -
+
+      # 9. Deploy the operator helm chart using the locally built image
+      helm upgrade --install vcluster-rancher-operator ./chart \
+        --namespace vcluster-rancher-operator-system \
+        --create-namespace \
+        --set image.tag=e2e
+      wait_pod --image-selector=${IMAGE_OPERATOR} --namespace vcluster-rancher-operator-system
+
+      # 10. Run e2e tests
+      RANCHER_HOST="https://${LOCAL_DOCKER_HOST}:7443" \
+        RANCHER_TOKEN="${API_KEY}" \
+        go run github.com/onsi/ginkgo/v2/ginkgo run --procs=3 --timeout=20m -v ./test/e2e/
+
+      # 11. Cleanup
+      stop_dev rancher
+
   deploy:
     run: |-
       run_dependencies --all                            # 1. Deploy any projects this project needs (see "dependencies")

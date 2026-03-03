@@ -13,6 +13,7 @@ Deploying a vCluster in Rancher should provide the same great experience that pr
 
 **Contents**
 - [Installation](#installation)
+- [Configuration](#configuration)
 - [Technical Details](#technical-details)
 - [Development](#development)
 
@@ -37,6 +38,99 @@ Please note that this plugin is not compatible with the [original vCluster Ranch
 1. Select the local cluster in the Rancher clusters overview page.
 2. In the sidebar, navigate to "Apps" -> "Installed Apps".
 3. Delete the vcluster-rancher-operator app. The app will be have the name you gave it during install.
+
+## Configuration
+
+### Cluster Naming
+
+By default, the operator names the Rancher provisioning cluster `<host-cluster>-<namespace>-<vcluster-name>`. You can override this by setting annotations on the vCluster's control-plane service via `controlPlane.service.annotations` in `vcluster.yaml`.
+
+| Annotation | Description |
+|---|---|
+| `platform.vcluster.com/custom-name` | Set an exact name for the Rancher cluster. Must be ≤ 63 characters. |
+| `platform.vcluster.com/custom-name-prefix` | Set a prefix; the operator appends a unique suffix. Prefix must be ≤ 58 characters (including trailing `-`). |
+
+If both annotations are present, `custom-name` takes precedence.
+
+**Example — exact name:**
+
+```yaml
+controlPlane:
+  service:
+    annotations:
+      platform.vcluster.com/custom-name: my-rancher-cluster
+```
+
+**Example — prefix (operator appends a unique suffix):**
+
+```yaml
+controlPlane:
+  service:
+    annotations:
+      platform.vcluster.com/custom-name-prefix: my-team-
+```
+
+This produces a cluster name like `my-team-x7k2p`.
+
+### Label Syncing (`syncLabels`)
+
+The operator can sync labels from a vCluster's service to its corresponding Rancher cluster object. This is useful for surfacing vCluster metadata in Rancher's UI or for policy enforcement.
+
+| Helm Value | Default | Description |
+|---|---|---|
+| `syncLabels.includeKeys` | `[]` | Label keys (or key prefixes) to sync from the vCluster service to the Rancher cluster. |
+| `syncLabels.excludeKeys` | `[]` | Label keys (or key prefixes) to exclude from syncing, taking precedence over `includeKeys`. |
+
+**Key prefix wildcards** are supported. For example, `"org.company/*"` matches all labels with the `org.company/` prefix, and `"*"` matches all labels.
+
+The following label keys are always excluded regardless of configuration:
+- Labels with the `loft.sh` prefix
+- Labels with the `vcluster.loft.sh` prefix
+- Standard Helm labels (`app.kubernetes.io/managed-by`, `helm.sh/chart`, etc.)
+
+Labels are sourced from the vCluster's control-plane service, configured via `controlPlane.service.labels` in `vcluster.yaml`.
+
+> **Caution:** Label syncing is a full sync — labels present on the Rancher cluster but absent from the vCluster service will be removed.
+
+**Example:**
+
+```yaml
+syncLabels:
+  includeKeys:
+    - "org.company/*"
+    - "environment"
+  excludeKeys:
+    - "org.company/internal"
+```
+
+### Fleet Workspace (`fleet`)
+
+By default, clusters registered by the operator are placed in the `fleet-default` Fleet workspace. You can override this globally or map specific Rancher projects to different workspaces.
+
+| Helm Value | Default | Description |
+|---|---|---|
+| `fleet.defaultWorkspace` | `"fleet-default"` | The Fleet workspace used for newly created clusters when no project mapping matches. |
+| `fleet.projectUIDToWorkspaceMappings` | `{}` | A map of Rancher project UIDs to Fleet workspace names. |
+
+> **Note:** These settings only affect newly created clusters. Existing clusters are not moved between workspaces.
+
+Project UIDs are used as mapping keys (rather than project names) to avoid cross-cluster name collisions.
+
+To find a project's UID, inspect the project object in Rancher:
+
+```sh
+kubectl get projects.management.cattle.io -n <cluster-id> -o jsonpath='{.items[*].metadata.uid}'
+```
+
+**Example:**
+
+```yaml
+fleet:
+  defaultWorkspace: "fleet-default"
+  projectUIDToWorkspaceMappings:
+    "asdf-asdf-asdf-asdf": "team-a-fleet"
+    "zxcv-zxcv-zxcv-zxcv": "team-b-fleet"
+```
 
 ## Technical Details
 
@@ -162,6 +256,41 @@ KUBECONFIG=/path/to/rancher/host-cluster-kubeconfig.yaml helm install chart --ge
 
 ```sh
 KUBECONFIG=/path/to/rancher/host-cluster-kubeconfig.yaml helm install chart --generate-name --create-namespace --set image.registry=<REGISTRY> --set image.repository=<REPO/REPO> --set tag=<TAG>
+```
+
+### E2E Tests (Linux)
+
+**Prerequisites:** Docker, [just](https://just.systems), [DevSpace](https://www.devspace.sh/), `kubectl`, `helm`
+
+The e2e suite deploys Rancher and the operator inside a vCluster running on the Docker driver, then runs the Ginkgo tests against it.
+
+```sh
+just e2e-linux
+```
+
+This will:
+1. Configure the Docker daemon for vind (`sudo` required)
+2. Install the vCluster CLI if not already present
+3. Create the `host-cluster` vCluster via the Docker driver (skips if it already exists)
+4. Run the full DevSpace e2e pipeline (Rancher + operator + tests)
+
+To tear down the host cluster after the run:
+
+```sh
+just e2e-linux cleanup=true
+```
+
+To run the pipeline against an already-running host cluster (skipping setup):
+
+```sh
+just e2e-pipeline-linux
+```
+
+To run a single focused test:
+
+```sh
+RANCHER_HOST=https://172.17.0.1:7443 RANCHER_TOKEN=<token> \
+  go run github.com/onsi/ginkgo/v2/ginkgo run --focus="<test name>" -v ./test/e2e/
 ```
 
 ### Update RBAC for installed service account

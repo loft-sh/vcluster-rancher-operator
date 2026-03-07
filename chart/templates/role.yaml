@@ -48,3 +48,12 @@ rules:
   - get
   - list
   - update
+{{- if .Values.fleet.autoCreateWorkspace }}
+- apiGroups:
+  - management.cattle.io
+  resources:
+  - fleetworkspaces
+  verbs:
+  - create
+  - get
+{{- end }}

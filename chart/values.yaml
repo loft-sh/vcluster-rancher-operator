@@ -16,6 +16,7 @@ image:
 fleet:
   defaultWorkspace: "fleet-default"
   projectUIDToWorkspaceMappings: {}
+  autoCreateWorkspace: false
 
 # syncLabels syncs labels from the vcluster service to it corresponding cluster objects
 # includeKeys and excludeKeys support key-prefixes in the format of "<key>*", for example "org.company/*". "*" is also supported.

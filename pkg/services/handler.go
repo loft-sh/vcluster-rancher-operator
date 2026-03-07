@@ -136,6 +136,11 @@ func (h *Handler) ensureProvisioningCluster(logger logr.Logger, service *corev1.
 			labels[constants.LabelProjectUID] = constants.ValueNoRancherProjectOnNameSpace
 		}
 
+		targetNamespace := h.getTargetClusterNamespace(labels[constants.LabelProjectUID])
+		if err := h.ensureFleetWorkspace(logger, targetNamespace); err != nil {
+			return v1unstructured.Unstructured{}, err
+		}
+
 		clusterName, useGenName, err := h.getProvisioningClusterName(service)
 		if err != nil {
 			return v1unstructured.Unstructured{}, fmt.Errorf("failed to generate provisioning cluster name: %w", err)
@@ -144,7 +149,7 @@ func (h *Handler) ensureProvisioningCluster(logger logr.Logger, service *corev1.
 			h.Ctx,
 			gvk.ClusterProvisioningCattle,
 			clusterName,
-			h.getTargetClusterNamespace(labels[constants.LabelProjectUID]),
+			targetNamespace,
 			useGenName,
 			labels,
 			nil,
@@ -446,6 +451,29 @@ func (h *Handler) getProvisioningClusterName(service *corev1.Service) (string, b
 	}
 
 	return name, true, nil
+}
+
+func (h *Handler) ensureFleetWorkspace(logger logr.Logger, namespace string) error {
+	_, err := h.LocalUnstructuredClient.Get(h.Ctx, gvk.FleetWorkspaceManagementCattle, namespace, "")
+	if err == nil {
+		return nil
+	}
+	if !kerrors.IsNotFound(err) {
+		return fmt.Errorf("failed to check fleet workspace %q: %w", namespace, err)
+	}
+
+	if !h.Config.FleetAutoCreateWorkspace {
+		return fmt.Errorf("fleet workspace %q does not exist; set fleet.autoCreateWorkspace=true to create it automatically", namespace)
+	}
+
+	logger.Info("fleet workspace does not exist, auto-creating", "workspace", namespace)
+	_, err = h.LocalUnstructuredClient.Create(h.Ctx, gvk.FleetWorkspaceManagementCattle, namespace, "", false, map[string]string{
+		constants.LabelAutoCreated: "true",
+	}, nil, nil)
+	if err != nil && !kerrors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create fleet workspace %q: %w", namespace, err)
+	}
+	return nil
 }
 
 func (h *Handler) getTargetClusterNamespace(projectUID string) string {

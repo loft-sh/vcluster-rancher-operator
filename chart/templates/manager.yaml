@@ -55,6 +55,8 @@ spec:
         env:
           - name: VCLUSTER_FLEET_DEFAULT_WORKSPACE
             value: {{ .Values.fleet.defaultWorkspace }}
+          - name: VCLUSTER_FLEET_AUTO_CREATE_WORKSPACE
+            value: {{ .Values.fleet.autoCreateWorkspace | quote }}
           - name: VCLUSTER_FLEET_PROJ_UID_WORKSPACE_MAPPINGS
             value: {{ join "," $pairs | quote }}
           - name: VCLUSTER_SYNC_INCLUDE_LABEL_KEYS

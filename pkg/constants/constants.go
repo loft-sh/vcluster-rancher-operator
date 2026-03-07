@@ -21,6 +21,7 @@ const (
 
 	AnnotationCustomName       = "platform.vcluster.com/custom-name"
 	AnnotationCustomNamePrefix = "platform.vcluster.com/custom-name-prefix"
+	LabelAutoCreated           = "platform.vcluster.com/auto-created"
 
 	ValueNoRancherProjectOnNameSpace = "no-rancher-project-on-namespace"
 )

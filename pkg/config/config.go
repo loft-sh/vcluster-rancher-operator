@@ -10,6 +10,7 @@ import (
 type Config struct {
 	FleetDefaultWorkspace                 string
 	FleetProjectUIDToWorkspaceMappings    map[string]string
+	FleetAutoCreateWorkspace              bool
 	ServiceSyncIncludeLabelKeys           []string
 	ServiceSyncExcludeLabelKeys           []string
 	ServiceSyncIncludeLabelKeysWithPrefix []string
@@ -19,6 +20,7 @@ type Config struct {
 func LoadConfigFromEnv() Config {
 	config := Config{}
 	config.FleetDefaultWorkspace = os.Getenv(constants.EnvFleetDefaultWorkspace)
+	config.FleetAutoCreateWorkspace = os.Getenv(constants.EnvFleetAutoCreateWorkspace) == "true"
 	for _, v := range strings.Split(os.Getenv(constants.EnvFleetProjectUIDWorkspaceMapping), ",") {
 		parts := strings.Split(v, ":")
 		if len(parts) != 2 {

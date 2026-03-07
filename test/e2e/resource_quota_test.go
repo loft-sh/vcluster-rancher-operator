@@ -28,6 +28,8 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/loft-sh/vcluster-rancher-operator/pkg/constants"
+	"github.com/loft-sh/vcluster-rancher-operator/pkg/unstructured/gvk"
 	"github.com/loft-sh/vcluster-rancher-operator/test/utils"
 )
 
@@ -107,25 +109,16 @@ var _ = Describe("VCluster Resource Quota Sync", Ordered, func() {
 
 		By("waiting for the Rancher management cluster to become Active (Ready=True)")
 		Eventually(func(g Gomega) {
-			list, err := rancherClient.Resource(managementClustersGVR).List(
-				context.Background(),
-				metav1.ListOptions{LabelSelector: fmt.Sprintf("loft.sh/vcluster-service-uid=%s", serviceUID)},
-			)
+			cluster, err := rancherClient.GetFirstWithLabel(context.Background(), gvk.ClustersManagementCattle, constants.LabelVClusterServiceUID, serviceUID)
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(list.Items).NotTo(BeEmpty())
-			g.Expect(isReady(list.Items[0])).To(BeTrue(),
-				"management cluster conditions: %v", conditionSummary(list.Items[0]))
+			g.Expect(isReady(cluster)).To(BeTrue(),
+				"management cluster conditions: %v", conditionSummary(cluster))
 		}, 10*time.Minute, 15*time.Second).Should(Succeed())
 
 		By("waiting for the operator to sync resource quota limits to the management cluster status")
 		Eventually(func(g Gomega) {
-			list, err := rancherClient.Resource(managementClustersGVR).List(
-				context.Background(),
-				metav1.ListOptions{LabelSelector: fmt.Sprintf("loft.sh/vcluster-service-uid=%s", serviceUID)},
-			)
+			cluster, err := rancherClient.GetFirstWithLabel(context.Background(), gvk.ClustersManagementCattle, constants.LabelVClusterServiceUID, serviceUID)
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(list.Items).NotTo(BeEmpty())
-			cluster := list.Items[0]
 			g.Expect(nestedString(cluster, "status", "capacity", "cpu")).To(Equal(cpuLimit), "capacity.cpu")
 			g.Expect(nestedString(cluster, "status", "capacity", "memory")).To(Equal(memoryLimit), "capacity.memory")
 			g.Expect(nestedString(cluster, "status", "allocatable", "cpu")).To(Equal(cpuLimit), "allocatable.cpu")

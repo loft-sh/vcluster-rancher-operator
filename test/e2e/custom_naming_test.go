@@ -28,6 +28,8 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/loft-sh/vcluster-rancher-operator/pkg/constants"
+	"github.com/loft-sh/vcluster-rancher-operator/pkg/unstructured/gvk"
 	"github.com/loft-sh/vcluster-rancher-operator/test/utils"
 )
 
@@ -99,13 +101,9 @@ var _ = Describe("VCluster Custom Name Annotation", Ordered, func() {
 
 		By("waiting for the operator to create a provisioning cluster with the custom name")
 		Eventually(func(g Gomega) {
-			list, err := rancherClient.Resource(provisioningClustersGVR).Namespace("").List(
-				context.Background(),
-				metav1.ListOptions{LabelSelector: fmt.Sprintf("loft.sh/vcluster-service-uid=%s", serviceUID)},
-			)
+			cluster, err := rancherClient.GetFirstWithLabel(context.Background(), gvk.ClusterProvisioningCattle, constants.LabelVClusterServiceUID, serviceUID)
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(list.Items).NotTo(BeEmpty())
-			g.Expect(list.Items[0].GetName()).To(Equal(customName))
+			g.Expect(cluster.GetName()).To(Equal(customName))
 		}, 2*time.Minute, 5*time.Second).Should(Succeed())
 	})
 })
@@ -178,13 +176,9 @@ var _ = Describe("VCluster Custom Name Prefix Annotation", Ordered, func() {
 
 		By("waiting for the operator to create a provisioning cluster with a name starting with the custom prefix")
 		Eventually(func(g Gomega) {
-			list, err := rancherClient.Resource(provisioningClustersGVR).Namespace("").List(
-				context.Background(),
-				metav1.ListOptions{LabelSelector: fmt.Sprintf("loft.sh/vcluster-service-uid=%s", serviceUID)},
-			)
+			cluster, err := rancherClient.GetFirstWithLabel(context.Background(), gvk.ClusterProvisioningCattle, constants.LabelVClusterServiceUID, serviceUID)
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(list.Items).NotTo(BeEmpty())
-			g.Expect(list.Items[0].GetName()).To(HavePrefix(customPrefix))
+			g.Expect(cluster.GetName()).To(HavePrefix(customPrefix))
 		}, 2*time.Minute, 5*time.Second).Should(Succeed())
 	})
 })

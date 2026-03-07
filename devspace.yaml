@@ -67,7 +67,7 @@ pipelines:
       create_deployments rancher
       wait_pod --image-selector=${IMAGE_RANCHER} --namespace cattle-system
 
-      # 3. Start port-forwarding so the runner (outside K3s) can reach Rancher for
+      # 3. Start port-forwarding so the runner can reach Rancher for
       #    bootstrap API calls and test management kubectl commands.
       start_dev rancher
 
@@ -84,10 +84,9 @@ pipelines:
         ELAPSED=$((ELAPSED + 10))
       done
 
-      # 5. Create a separate NodePort service so that pods inside K3s (the registration
-      #    job and cattle-cluster-agent) can reach Rancher directly via kube-proxy
-      #    DNAT rules — bypassing the port-forward whose disconnection would sever
-      #    the agent's persistent WebSocket connection.
+      # 5. Create a separate NodePort service so that pods inside the cluster (the registration
+      #    job and cattle-cluster-agent) can reach Rancher directly — bypassing the port-forward
+      #    whose disconnection would sever the agent's persistent WebSocket connection.
       #    We do NOT modify the existing 'rancher' ClusterIP service so that the
       #    start_dev port-forward (step 3) remains unaffected.
       #    Note: the runner uses the port-forward (LOCAL_DOCKER_HOST:7443) for its

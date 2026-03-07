@@ -18,6 +18,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"time"
 
@@ -30,10 +31,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-var _ = Describe("VCluster Helm Driver", Ordered, func() {
+const (
+	operatorNamespace = "vcluster-rancher-operator-system"
+	operatorRelease   = "vcluster-rancher-operator"
+)
+
+var _ = Describe("VCluster Fleet Workspace - Auto Create", Ordered, Serial, func() {
 	const (
-		vclusterName = "test-vc"
-		vclusterNS   = "e2e-test-vc"
+		vclusterName     = "test-vc-missing-ws"
+		vclusterNS       = "e2e-test-missing-ws"
+		missingWorkspace = "fleet-does-not-exist"
 	)
 
 	var serviceUID string
@@ -41,6 +48,17 @@ var _ = Describe("VCluster Helm Driver", Ordered, func() {
 	BeforeAll(func() {
 		By("creating test namespace")
 		createNamespace(vclusterNS)
+
+		By("reinstalling operator targeting a non-existent fleet workspace with autoCreateWorkspace=true")
+		cmd := exec.Command("helm", "upgrade", "--install", operatorRelease, "./chart",
+			"--namespace", operatorNamespace,
+			"--set", "image.tag=e2e",
+			"--set", fmt.Sprintf("fleet.defaultWorkspace=%s", missingWorkspace),
+			"--set", "fleet.autoCreateWorkspace=true",
+			"--wait",
+		)
+		_, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred())
 	})
 
 	AfterAll(func() {
@@ -52,10 +70,25 @@ var _ = Describe("VCluster Helm Driver", Ordered, func() {
 		_ = hostClient.CoreV1().Namespaces().Delete(
 			context.Background(), vclusterNS, metav1.DeleteOptions{},
 		)
+
+		By("deleting auto-created fleet workspace")
+		workspace, err := rancherClient.Get(context.Background(), gvk.FleetWorkspaceManagementCattle, missingWorkspace, "")
+		if err == nil {
+			_ = rancherClient.Delete(context.Background(), &workspace)
+		}
+
+		By("restoring operator with default fleet workspace")
+		cmd = exec.Command("helm", "upgrade", "--install", operatorRelease, "./chart",
+			"--namespace", operatorNamespace,
+			"--set", "image.tag=e2e",
+			"--wait",
+		)
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred())
 	})
 
-	It("should create a Rancher cluster that becomes Active", func() {
-		By("creating a vcluster with the helm driver")
+	It("should auto-create the fleet workspace and create a provisioning cluster", func() {
+		By("creating a vcluster")
 		cmd := exec.Command("vcluster", "create", vclusterName,
 			"--driver", "helm",
 			"--namespace", vclusterNS,
@@ -74,18 +107,17 @@ var _ = Describe("VCluster Helm Driver", Ordered, func() {
 			serviceUID = string(svc.UID)
 		}, 2*time.Minute, 5*time.Second).Should(Succeed())
 
-		By("waiting for the operator to create a provisioning cluster in Rancher")
+		By("waiting for the operator to auto-create the missing fleet workspace")
+		Eventually(func(g Gomega) {
+			ws, err := rancherClient.Get(context.Background(), gvk.FleetWorkspaceManagementCattle, missingWorkspace, "")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(ws.GetLabels()).To(HaveKeyWithValue(constants.LabelAutoCreated, "true"))
+		}, 2*time.Minute, 5*time.Second).Should(Succeed())
+
+		By("waiting for the operator to create a provisioning cluster in the new workspace")
 		Eventually(func(g Gomega) {
 			_, err := rancherClient.GetFirstWithLabel(context.Background(), gvk.ClusterProvisioningCattle, constants.LabelVClusterServiceUID, serviceUID)
 			g.Expect(err).NotTo(HaveOccurred())
 		}, 2*time.Minute, 5*time.Second).Should(Succeed())
-
-		By("waiting for the Rancher management cluster to become Active (Ready=True)")
-		Eventually(func(g Gomega) {
-			cluster, err := rancherClient.GetFirstWithLabel(context.Background(), gvk.ClustersManagementCattle, constants.LabelVClusterServiceUID, serviceUID)
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(isReady(cluster)).To(BeTrue(),
-				"management cluster conditions: %v", conditionSummary(cluster))
-		}, 10*time.Minute, 15*time.Second).Should(Succeed())
 	})
 })

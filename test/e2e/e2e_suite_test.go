@@ -24,27 +24,16 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic"
+	pkgunstructured "github.com/loft-sh/vcluster-rancher-operator/pkg/unstructured"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 var (
 	hostClient    kubernetes.Interface
-	rancherClient dynamic.Interface
-
-	provisioningClustersGVR = schema.GroupVersionResource{
-		Group:    "provisioning.cattle.io",
-		Version:  "v1",
-		Resource: "clusters",
-	}
-	managementClustersGVR = schema.GroupVersionResource{
-		Group:    "management.cattle.io",
-		Version:  "v3",
-		Resource: "clusters",
-	}
+	rancherClient *pkgunstructured.Client
 )
 
 func TestE2E(t *testing.T) {
@@ -71,6 +60,7 @@ var _ = BeforeSuite(func() {
 			Insecure: true,
 		},
 	}
-	rancherClient, err = dynamic.NewForConfig(rancherCfg)
+	rancherCtrlClient, err := client.New(rancherCfg, client.Options{})
 	Expect(err).NotTo(HaveOccurred())
+	rancherClient = &pkgunstructured.Client{Client: rancherCtrlClient}
 })

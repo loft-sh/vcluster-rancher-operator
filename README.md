@@ -111,8 +111,11 @@ By default, clusters registered by the operator are placed in the `fleet-default
 |---|---|---|
 | `fleet.defaultWorkspace` | `"fleet-default"` | The Fleet workspace used for newly created clusters when no project mapping matches. |
 | `fleet.projectUIDToWorkspaceMappings` | `{}` | A map of Rancher project UIDs to Fleet workspace names. |
+| `fleet.autoCreateWorkspace` | `false` | When `true`, automatically creates the target Fleet workspace if it does not exist. |
 
 > **Note:** These settings only affect newly created clusters. Existing clusters are not moved between workspaces.
+
+When `autoCreateWorkspace` is `false` (the default) and the target workspace does not exist, the operator will return an error. Set it to `true` to have the operator create the workspace automatically. Auto-created workspaces are tagged with the label `platform.vcluster.com/auto-created=true`.
 
 Project UIDs are used as mapping keys (rather than project names) to avoid cross-cluster name collisions.
 

@@ -159,9 +159,12 @@ func (q *Handler) handleErr(err error, item Item) {
 	if isWaiting {
 		// log at info level - this is an expected condition during normal operation
 		q.logger.Info(err.Error()+", waiting...", "key", item.Key)
+		// successive retries are expected during wait; use a fixed retry interval over exponential backoff
+		q.queue.Forget(item)
+		q.queue.AddAfter(item, 5*time.Second)
 	} else {
 		// log actual errors at error level with stack trace for debugging
 		q.logger.Error(err, "error reconciling item, will retry", "key", item.Key)
+		q.queue.AddRateLimited(item)
 	}
-	q.queue.AddRateLimited(item)
 }

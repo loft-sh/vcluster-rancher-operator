@@ -1,7 +1,9 @@
 package services
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"slices"
@@ -24,6 +26,10 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+// tokenPlaceholder is the placeholder rancher leaves in a cluster registration token's status
+// commands in place of the actual token.
+const tokenPlaceholder = "{token}"
 
 var (
 	ErrRancherResourcesPending   = errors.New("rancher resources pending")
@@ -236,6 +242,91 @@ func (h *Handler) getRancherResources(logger logr.Logger, service *corev1.Servic
 	return true, managementCluster, clusterRegistrationToken, nil
 }
 
+// resolveRegistrationCommand returns the cluster registration token's insecure command with the
+// token placeholder replaced by the actual registration token.
+//
+// Rancher templates its status commands with tokenPlaceholder and, since Rancher 2.15, no longer
+// sets status.token. The token is stored in the secret referenced by status.tokenSecretName and the
+// placeholder is only substituted by Rancher's /v3 API, not on the resource itself. Reading
+// status.insecureCommand directly therefore yields a command that installs nothing.
+//
+// ErrRancherResourcesPending is returned when the command or the token is not available yet, so the
+// caller retries instead of creating an install job that cannot succeed.
+func (h *Handler) resolveRegistrationCommand(clusterRegistrationToken v1unstructured.Unstructured) (string, error) {
+	command := unstructured.GetNested[string](clusterRegistrationToken.Object, "status", "insecureCommand")
+	if command == "" {
+		return "", fmt.Errorf("cluster registration token has no insecure command: %w", ErrRancherResourcesPending)
+	}
+
+	if !strings.Contains(command, tokenPlaceholder) {
+		return command, nil
+	}
+
+	token, err := h.registrationToken(clusterRegistrationToken)
+	if err != nil {
+		return "", err
+	}
+
+	return strings.ReplaceAll(command, tokenPlaceholder, token), nil
+}
+
+// registrationToken returns the value of the given cluster registration token, preferring
+// status.token and falling back to the secret named by status.tokenSecretName.
+func (h *Handler) registrationToken(clusterRegistrationToken v1unstructured.Unstructured) (string, error) {
+	if token := unstructured.GetNested[string](clusterRegistrationToken.Object, "status", "token"); token != "" {
+		return token, nil
+	}
+
+	secretName := unstructured.GetNested[string](clusterRegistrationToken.Object, "status", "tokenSecretName")
+	if secretName == "" {
+		return "", fmt.Errorf("cluster registration token has neither status.token nor status.tokenSecretName: %w", ErrRancherResourcesPending)
+	}
+
+	// the cluster registration token is namespaced by the management cluster's name
+	secret, err := h.LocalUnstructuredClient.Get(h.Ctx, gvk.SecretCore, secretName, clusterRegistrationToken.GetNamespace())
+	if err != nil {
+		if kerrors.IsNotFound(err) {
+			return "", fmt.Errorf("waiting for cluster registration token secret %q: %w", secretName, ErrRancherResourcesPending)
+		}
+		return "", fmt.Errorf("failed to get cluster registration token secret %q: %w", secretName, err)
+	}
+
+	return decodeRegistrationToken(secret, secretName)
+}
+
+// decodeRegistrationToken returns the base64 decoded token stored in the given cluster registration
+// token secret.
+func decodeRegistrationToken(secret v1unstructured.Unstructured, secretName string) (string, error) {
+	encoded := unstructured.GetNested[string](secret.Object, "data", "token")
+	if encoded == "" {
+		return "", fmt.Errorf("cluster registration token secret %q has no token: %w", secretName, ErrRancherResourcesPending)
+	}
+
+	token, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode cluster registration token secret %q: %w", secretName, err)
+	}
+
+	token = bytes.TrimSpace(token)
+	if len(token) == 0 {
+		return "", fmt.Errorf("cluster registration token secret %q has an empty token: %w", secretName, ErrRancherResourcesPending)
+	}
+
+	return string(token), nil
+}
+
+// agentInstallScript renders the script that installs the rancher cluster agent inside the vCluster.
+// The generated kubeconfig targets the vCluster service in the host cluster, so the registration
+// command has to be pointed at it. curl keeps failing on HTTP errors but reports them instead of
+// staying silent, and pipefail makes a failing curl fail the script rather than letting kubectl
+// report the misleading "no objects passed to apply".
+func agentInstallScript(clusterIP, command string) string {
+	command = strings.Replace(command, "kubectl ", "kubectl --kubeconfig /tmp/vcluster-kc.yaml ", 1)
+	command = strings.Replace(command, "curl --insecure -sfL", "curl --insecure -fL --show-error", 1)
+
+	return fmt.Sprintf("set -o pipefail && cat /etc/config/config | sed 's/localhost:8443/%s:443/g' > /tmp/vcluster-kc.yaml && %s", clusterIP, command)
+}
+
 func (h *Handler) ensureAgentDeployed(logger logr.Logger, service *corev1.Service, clusterRegistrationToken v1unstructured.Unstructured, isReady bool) error {
 	pods, err := h.ClusterClient.CoreV1().Pods(service.Namespace).List(h.Ctx, v1.ListOptions{LabelSelector: "app=cattle-cluster-agent"})
 	if err != nil {
@@ -274,7 +365,10 @@ func (h *Handler) ensureAgentDeployed(logger logr.Logger, service *corev1.Servic
 		}
 	}
 
-	command := unstructured.GetNested[string](clusterRegistrationToken.Object, "status", "insecureCommand")
+	command, err := h.resolveRegistrationCommand(clusterRegistrationToken)
+	if err != nil {
+		return err
+	}
 	deleteTTL := int32(0)
 
 	logger.Info("creating job to deploy rancher cluster agent in vCluster")
@@ -301,7 +395,7 @@ func (h *Handler) ensureAgentDeployed(logger logr.Logger, service *corev1.Servic
 							Command:         []string{"/bin/bash"},
 							Args: []string{
 								"-c",
-								fmt.Sprintf(`cat /etc/config/config | sed 's/localhost:8443/%s:443/g' > /tmp/vcluster-kc.yaml && %s`, service.Spec.ClusterIP, strings.Replace(command, "kubectl ", "kubectl --kubeconfig /tmp/vcluster-kc.yaml ", 1)),
+								agentInstallScript(service.Spec.ClusterIP, command),
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{

@@ -15,6 +15,7 @@ var (
 	ClusterRegistrationTokenManagementCattle   = schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ClusterRegistrationToken"}
 	ClusterProvisioningCattle                  = schema.GroupVersionKind{Group: "provisioning.cattle.io", Version: "v1", Kind: "Cluster"}
 	FleetWorkspaceManagementCattle             = schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "FleetWorkspace"}
+	SecretCore                                 = schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"}
 )
 
 func ToUnstructured(gvk schema.GroupVersionKind) *v1unstructured.Unstructured {
